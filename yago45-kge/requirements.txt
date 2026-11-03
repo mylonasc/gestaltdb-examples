@@ -1,0 +1,14 @@
+tensorflow[and-cuda]>=2.17
+tf_keras>=2.15
+tensorflow_probability>=0.24
+keras>=3
+polars
+pyarrow
+numpy
+tqdm
+pyrex-rocksdb>=0.4.1
+lmdb
+plyvel
+msgpack
+gestaltdb[fast-ingest]
+tf_gnns

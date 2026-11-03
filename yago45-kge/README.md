@@ -34,6 +34,12 @@ Two trained artifacts are produced in this repo:
   Entity matrix ~3.2GB. Train/validation curves: `artifacts/curves.jsonl`,
   `artifacts/curves.png`.
 
+Train/validation curves (100k steps, 12M-edge facts run) and t-SNE of 4,000
+entity embeddings colored by dominant relation:
+
+![curves](notebooks/figures/curves_facts_12M.png)
+![t-SNE](notebooks/figures/tsne_facts_4k.png)
+
 ## Method
 
 - **Model (GNN-autoencoder, DistMult-style decoder):** trainable entity table

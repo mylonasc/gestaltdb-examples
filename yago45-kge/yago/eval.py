@@ -62,14 +62,14 @@ def main() -> None:
     rng = np.random.default_rng(0)
     n = min(args.triples, len(tst))
     sel = rng.choice(len(tst), size=n, replace=False)
-    En = E / (np.linalg.norm(E, axis=1, keepdims=True) + 1e-9)
-    Rn = R / (np.linalg.norm(R, axis=1, keepdims=True) + 1e-9)
+    # Standard DistMult scores (raw dot products, NOT cosine: norms carry
+    # signal, matching the training objective and validation protocol).
     ranks = []
     for s, r, o in tst[sel]:
         cand_o = rng.integers(0, len(E), size=args.negatives).tolist()
         cands = [o] + [c for c in cand_o if (s, r, c) not in known_o or c == o]
         cands = cands[: args.negatives + 1]
-        scores = np.sum(En[s] * Rn[r] * En[cands], axis=1)
+        scores = np.sum(E[s] * R[r] * E[cands], axis=1)
         ranks.append(int(1 + np.sum(scores[1:] >= scores[0])))
     ranks = np.array(ranks)
     print(f"split={args.split} n={n} MRR={float(np.mean(1.0/ranks)):.4f} "

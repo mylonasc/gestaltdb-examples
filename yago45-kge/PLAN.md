@@ -51,6 +51,13 @@ Train a knowledge-graph embedding model for YAGO 4.5 with:
 - [x] Eval facts: MRR 0.088 / Hits@10 0.19; serve demo works on both graphs
 - [x] Verified: 200-d float32 entity+relation matrices, finite, id-aligned; gestaltdb serves Cypher + CSR sampling
 - [x] README + scripts + yago/ library complete
+- [x] Pushed as yago45-kge to mylonasc/gestaltdb-examples (scripts + docs)
+- [x] Added notes/visualization notebook (t-SNE subset, relation heatmap, NN checks)
+- [x] Facts v2: 12.0M train / 10k valid / 10k test, 25 rels, 4.18M nodes; snapshot OK
+- [x] Fast numpy negatives (51x: 1642ms -> 32ms/batch); threads dropped (GIL-bound)
+- [x] LR 3e-4 + 16 negs (sparse base-table updates); train/val curves JSONL+PNG
+- [~] Big run: 100k steps @ ~8/s, valid MRR 0.085 -> 0.138 @16k — running
+- [ ] Final test eval + curves plot + notebook refresh + push
 
 ## Notes
 - TF GPU needs LD_LIBRARY_PATH from pip nvidia libs (see gestaltdb example run_training.sh).

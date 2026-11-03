@@ -27,11 +27,12 @@ Two trained artifacts are produced in this repo:
   MRR 0.089 / Hits@10 0.20 @ 50 negatives).
 - `data/yago45_facts/artifacts/yago45_embeddings_200d.npz` — facts-scale run on
   `yago-facts.ttl` (all YAGO 4.5 entities with an English Wikipedia page):
-  **8.0M triples / 3.64M entities / 27 relations** (stratified per-relation cap
-  500k), 8k steps (loss 2.20 -> ~1.2; MRR 0.088 / Hits@10 0.19 @ 50 negatives).
-  Entity matrix ~2.9GB.
-- `data/yago45_facts/nn_report` note: NN similarities (~0.3-0.36) reflect a
-  short 8k-step run (~6% triple coverage); extend `--steps` for tighter clusters.
+  **12.0M train triples / 4.18M entities / 25 relations** (stratified
+  per-relation cap 1M) + 10k held-out valid + 10k held-out test, 100k steps
+  (~8 steps/s; loss 2.83 -> ~0.95; **valid MRR 0.085 -> 0.169**,
+  **filtered test MRR 0.173 / Hits@10 0.31** @ 50 negatives, 2x random).
+  Entity matrix ~3.2GB. Train/validation curves: `artifacts/curves.jsonl`,
+  `artifacts/curves.png`.
 
 ## Method
 
@@ -79,9 +80,18 @@ cd yago45_kge && ../.venv/bin/python -m yago.eval --triples 2000 --negatives 50
 cd yago45_kge && ../.venv/bin/python -m yago.serve --k 5
 ```
 
+HOLD-OUT PROTOCOL (no leakage): triples are split into train/valid/test at
+prepare time (`--valid-size`, `--test-size`, default 10k each; endpoints must
+occur >= 3x so held-out entities stay observable). The GestaltDB ingest and CSR
+snapshot are built from TRAIN ONLY. During training, `valid_mrr`/`valid_hits10`
+are logged every `--eval-every` steps to `artifacts/curves.jsonl` (+ `curves.png`);
+final numbers come from `yago/eval.py` on the held-out TEST split with the
+standard filtered protocol.
+
 Useful flags: `prepare.sh --ttl <file.zip|file.ttl> --limit-lines N --min-relation-edges K
---target-edges M --skip-ingest --skip-parse`; `train.sh --xla --learning-rate 3e-4
---allow-cpu`.
+--target-edges M --max-edges-per-relation C --valid-size V --test-size T
+--skip-ingest --skip-parse`; `train.sh --fast-negatives --negatives 16
+--learning-rate 3e-4 --workers 0 --eval-every 2000 --xla --allow-cpu`.
 
 ## Performance (RTX 4090, this repo)
 
@@ -89,8 +99,9 @@ Useful flags: `prepare.sh --ttl <file.zip|file.ttl> --limit-lines N --min-relati
 |---|---|
 | Turtle parse (23.2M lines, streamed from zip) | ~350k entity–entity triples kept |
 | GestaltDB RocksDB ingest (300k nodes + 352k edges) | ~1.5 s (~430k records/s) |
-| Sampler (batch 64, 2-hop 12/8, 8 hard negs) | ~2.3 batches/s, ~1.6k-node subgraphs |
-| End-to-end training (compiled `train_step`) | ~2.2 steps/s (~140 triples/s positive throughput) |
+| Sampler, hard negatives (batch 64, 2-hop 12/8) | ~2.3 batches/s (rejection loop bound) |
+| Sampler, fast numpy negatives (batch 64, 2-hop 12/8) | ~30 batches/s (33 ms/batch) |
+| End-to-end training, fast negatives (compiled `train_step`) | ~8 steps/s (~500 triples/s) |
 | Smoke (batch 8, 1 MP step) | ~60 steps/s |
 
 Feed-side is sampler-bound (expected: 2-hop expansion + filtered hard negatives

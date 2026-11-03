@@ -33,11 +33,12 @@ This notebook documents the `yago45-kge` example and visualizes the trained
 """))
 
 cells.append(code('''%matplotlib inline
+import os
 from pathlib import Path
 import numpy as np
 import polars as pl
 
-USE_FACTS = False  # set True for the 3.6M-entity facts run
+USE_FACTS = os.environ.get("YAGO_USE_FACTS", "") == "1"  # set YAGO_USE_FACTS=1 for the 4.2M-entity run
 
 # Works both in the workspace layout (data at repo root) and in a
 # self-contained example checkout (data inside the example dir).
@@ -98,7 +99,7 @@ plt.hist(norms, bins=60); plt.xlabel("||e||"); plt.ylabel("# entities")
 plt.title("Entity embedding norms"); plt.tight_layout(); plt.show()
 '''.strip()))
 
-cells.append(code('''triples = pl.scan_parquet(ART / "triples.parquet")
+cells.append(code('''triples = pl.scan_parquet(ART / "triples_train.parquet")
 edom = (triples.group_by(["source", "edge_type"]).len()
         .sort(["source", "len"], descending=[False, True])
         .group_by("source").first()
@@ -135,6 +136,34 @@ plt.title("t-SNE of 200-d YAGO entity embeddings (dominant-relation colors)")
 plt.tight_layout()
 out = ART / "tsne_subset.png"; plt.savefig(out, dpi=120); plt.show()
 print("saved", out)
+'''.strip()))
+
+cells.append(md("""## Train / validation curves (held-out triples)
+
+Logged every `eval_every` steps during training. Base-table DistMult scores on
+the held-out split (never in the sampler snapshot): unfiltered ranking over
+1 positive + 50 random negatives. If `curves.jsonl` is missing, the run
+predates validation logging.
+"""))
+
+cells.append(code('''import json as _json
+curves_file = ART / "curves.jsonl"
+if curves_file.exists():
+    curves = [_json.loads(l) for l in curves_file.read_text().splitlines()]
+    cdf = pl.DataFrame(curves)
+    print(cdf.tail(3))
+    bi = int(cdf["valid_mrr"].to_numpy().argmax())
+    print(f"best valid MRR={cdf['valid_mrr'][bi]:.4f} at step {int(cdf['step'][bi])}")
+    fig, ax1 = plt.subplots(figsize=(10, 4))
+    ax1.plot(cdf["step"].to_numpy(), cdf["train_loss"].to_numpy(), "o-", ms=3, label="train loss")
+    ax1.set_xlabel("step"); ax1.set_ylabel("InfoNCE loss"); ax1.legend(loc="upper left")
+    ax2 = ax1.twinx()
+    ax2.plot(cdf["step"].to_numpy(), cdf["valid_mrr"].to_numpy(), "s-", ms=3, color="C1", label="valid MRR")
+    ax2.plot(cdf["step"].to_numpy(), cdf["valid_hits10"].to_numpy(), "^-", ms=3, color="C2", label="valid Hits@10")
+    ax2.set_ylabel("MRR / Hits@10"); ax2.legend(loc="upper right")
+    plt.title("Train loss vs validation link-prediction"); plt.tight_layout(); plt.show()
+else:
+    print("no curves.jsonl (run predates validation logging)")
 '''.strip()))
 
 cells.append(md("""## Relation–relation cosine structure"""))

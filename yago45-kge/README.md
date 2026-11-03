@@ -54,10 +54,10 @@ Two trained artifacts are produced in this repo:
 ## Setup
 
 ```bash
-cd yago45-kge && python3 -m venv .venv
+python3 -m venv .venv
 ./.venv/bin/pip install "tensorflow[and-cuda]>=2.17" tf_keras tensorflow_probability \
   keras polars pyarrow numpy tqdm "pyrex-rocksdb>=0.4.1" lmdb plyvel msgpack
-pip install -r requirements.txt  # or: pip install -e <tf_gnns checkout> -e <gestaltdb checkout>
+pip install tf_gnns gestaltdb  # or: pip install -e <tf_gnns checkout> -e <gestaltdb checkout>
 ```
 
 `scripts/*.sh` set `KERAS_BACKEND=tensorflow` and extend `LD_LIBRARY_PATH` with the
@@ -68,15 +68,15 @@ pip `nvidia` CUDA libs so TensorFlow sees the GPU (same trick as
 
 ```bash
 # 1. Parse YAGO Turtle -> parquet shards -> maps/arrays -> GestaltDB ingest -> CSR snapshot
-bash yago45-kge/scripts/prepare.sh --reset-db
+bash yago45_kge/scripts/prepare.sh --reset-db
 # 2. Smoke test (10 steps, tiny model)
-bash yago45-kge/scripts/train.sh --smoke-test
+bash yago45_kge/scripts/train.sh --smoke-test
 # 3. Full training (default: 5000 steps, batch 64, 8 hard negatives)
-bash yago45-kge/scripts/train.sh --steps 5000 --batch-size 64
+bash yago45_kge/scripts/train.sh --steps 5000 --batch-size 64
 # 4. Link-prediction sanity (MRR / Hits@k, DistMult on exported tables)
-cd yago45-kge && ./.venv/bin/python -m yago.eval --triples 2000 --negatives 50
+cd yago45_kge && ../.venv/bin/python -m yago.eval --triples 2000 --negatives 50
 # 5. Serve demo: snapshot CSR neighborhood + embedding nearest neighbors
-cd yago45-kge && ./.venv/bin/python -m yago.serve --k 5
+cd yago45_kge && ../.venv/bin/python -m yago.serve --k 5
 ```
 
 Useful flags: `prepare.sh --ttl <file.zip|file.ttl> --limit-lines N --min-relation-edges K
@@ -106,6 +106,9 @@ thread-pooled prefetch around `sample_batch`.
 - `yago/model.py` — `YagoKGEModel` (tf_gnns MPNN + DistMult scorer)
 - `yago/losses.py`, `yago/train.py`, `yago/eval.py`, `yago/export.py`
 - `scripts/prepare.sh`, `scripts/train.sh` — GPU-env entry points
+- `notebooks/01_yago45_embeddings_notes.ipynb` — notes + visualizations
+  (relation stats, embedding norms, t-SNE subset, relation heatmap, NN checks);
+  regenerate with `notebooks/gen_notebook.py`, execute with nbconvert or Jupyter
 - `data/yago45/` — downloads, shards, artifacts, DB, snapshot
 - `PLAN.md` — build log
 
@@ -114,10 +117,10 @@ thread-pooled prefetch around `sample_batch`.
 ```bash
 curl -L -o data/yago45/yago-4.5.0.2.zip https://yago-knowledge.org/data/yago4.5/yago-4.5.0.2.zip
 # facts = entities with an EN Wikipedia page (23GB Turtle, streamed from zip)
-bash yago45-kge/scripts/prepare.sh --ttl data/yago45/yago-4.5.0.2.zip --ttl-member yago-facts.ttl \
+bash yago45_kge/scripts/prepare.sh --ttl data/yago45/yago-4.5.0.2.zip --ttl-member yago-facts.ttl \
   --data-root data/yago45_facts --reset-db \
   --min-relation-edges 50 --max-edges-per-relation 500000 --target-edges 8000000
-bash yago45-kge/scripts/train.sh --data-root data/yago45_facts --steps 8000 --batch-size 64 \
+bash yago45_kge/scripts/train.sh --data-root data/yago45_facts --steps 8000 --batch-size 64 \
   --hop1-fanout 8 --hop2-fanout 4
 ```
 

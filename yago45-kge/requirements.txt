@@ -12,3 +12,7 @@ plyvel
 msgpack
 gestaltdb[fast-ingest]
 tf_gnns
+scikit-learn
+matplotlib
+ipykernel
+nbconvert

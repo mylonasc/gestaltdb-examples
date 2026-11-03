@@ -1,4 +1,9 @@
-"""Filtered link-prediction eval: MRR / Hits@k with random negatives."""
+"""Link-prediction eval on the HELD-OUT TEST split (filtered MRR / Hits@k).
+
+Test triples were excluded from the sampler snapshot at prepare time, so this
+measures generalization. Filtered: train/valid positives sharing (s, r) are
+removed from the candidate list before ranking (standard filtered protocol).
+"""
 from __future__ import annotations
 
 import argparse
@@ -15,33 +20,63 @@ from yago.config import make_config
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--triples", type=int, default=2000)
-    ap.add_argument("--negatives", type=int, default=50)
+    ap.add_argument("--negatives", type=int, default=200)
     ap.add_argument("--smoke-test", action="store_true")
     ap.add_argument("--data-root", type=str, default=None)
+    ap.add_argument("--split", type=str, default="test", choices=["test", "valid"])
     args = ap.parse_args()
     cfg = make_config(smoke_test=args.smoke_test)
     if args.data_root:
-        from pathlib import Path as _Path
         from yago.config import PathsConfig as _PC
-        cfg.paths = _PC(data_root=_Path(args.data_root))
+        cfg.paths = _PC(data_root=Path(args.data_root))
+    import polars as pl
     data = np.load(cfg.paths.embeddings_path)
     E, R = data["entity"].astype(np.float32), data["relation"].astype(np.float32)
-    arrays = np.load(cfg.paths.edge_arrays_path)
-    src, dst, rel = arrays["src"], arrays["dst"], arrays["rel"]
+    node_map = pl.read_parquet(cfg.paths.node_map_path).sort("node_int")
+    rel_map = pl.read_parquet(cfg.paths.relation_map_path).sort("rel_int")
+    id2int = dict(zip(node_map["node_id"].to_list(), node_map["node_int"].to_list()))
+    rel2int = dict(zip(rel_map["edge_type"].to_list(), rel_map["rel_int"].to_list()))
+
+    def load_int(path):
+        rows = []
+        for r in pl.read_parquet(path).iter_rows(named=True):
+            if r["source"] in id2int and r["target"] in id2int and r["edge_type"] in rel2int:
+                rows.append((id2int[r["source"]], rel2int[r["edge_type"]], id2int[r["target"]]))
+        return np.array(rows, dtype=np.int64)
+
+    split_path = cfg.paths.triples_test_path if args.split == "test" else cfg.paths.triples_valid_path
+    tst = load_int(split_path)
+    train = load_int(cfg.paths.triples_parquet)
+    known = set(map(tuple, train.tolist())) | set(map(tuple, tst.tolist()))
+    try:
+        valid = load_int(cfg.paths.triples_valid_path)
+        known |= set(map(tuple, valid.tolist()))
+    except Exception:
+        pass
+    # (s, r) -> {known o} for filtered ranking.
+    from collections import defaultdict
+    known_o = defaultdict(set)
+    for s, r, o in known:
+        known_o[(s, r)].add(o)
+
     rng = np.random.default_rng(0)
-    n = min(args.triples, len(src))
-    sel = rng.choice(len(src), size=n, replace=False)
+    n = min(args.triples, len(tst))
+    sel = rng.choice(len(tst), size=n, replace=False)
     En = E / (np.linalg.norm(E, axis=1, keepdims=True) + 1e-9)
+    Rn = R / (np.linalg.norm(R, axis=1, keepdims=True) + 1e-9)
     ranks = []
-    for s, r, o in zip(src[sel], rel[sel], dst[sel]):
-        cand_o = rng.integers(0, len(E), size=args.negatives)
-        cands = np.concatenate([[o], cand_o])
-        scores = np.sum(En[s] * R[r] * En[cands], axis=1)
-        rank = int(1 + np.sum(scores[1:] >= scores[0]))
-        ranks.append(rank)
+    for s, r, o in tst[sel]:
+        cand_o = rng.integers(0, len(E), size=args.negatives).tolist()
+        cands = [o] + [c for c in cand_o if (s, r, c) not in known_o or c == o]
+        cands = cands[: args.negatives + 1]
+        scores = np.sum(En[s] * Rn[r] * En[cands], axis=1)
+        ranks.append(int(1 + np.sum(scores[1:] >= scores[0])))
     ranks = np.array(ranks)
-    mrr = float(np.mean(1.0 / ranks))
-    print(f"n={n} MRR={mrr:.4f} Hits@1={np.mean(ranks<=1):.4f} Hits@10={np.mean(ranks<=10):.4f}")
+    print(f"split={args.split} n={n} MRR={float(np.mean(1.0/ranks)):.4f} "
+          f"Hits@1={np.mean(ranks<=1):.4f} Hits@10={np.mean(ranks<=10):.4f} Hits@50={np.mean(ranks<=50):.4f}")
+    # Unfiltered random baseline for reference: E[1/rank] over K+1 candidates.
+    K = args.negatives
+    print(f"(random baseline MRR ~ {float(np.mean(1.0/np.arange(1, K+2))):.4f})")
 
 
 if __name__ == "__main__":

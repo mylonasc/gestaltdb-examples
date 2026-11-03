@@ -1,7 +1,13 @@
-"""Train YAGO KGE: compiled tf_gnns GNN + gestaltdb sampler feed."""
+"""Train YAGO KGE: compiled tf_gnns GNN + gestaltdb sampler feed.
+
+Logs train loss and held-out validation MRR/Hits to a JSONL curves file and
+renders train/validation curves at the end. Validation triples come from the
+link-prediction split saved at prepare time (never in the sampler snapshot).
+"""
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -9,6 +15,7 @@ from pathlib import Path
 
 os.environ.setdefault("KERAS_BACKEND", "tensorflow")
 
+import numpy as np
 import tensorflow as tf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -16,7 +23,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from yago.config import make_config
 from yago.losses import contrastive_infonce_loss
 from yago.model import YagoKGEModel
-from yago.sampler import YagoSampler, output_signature, sampled_batch_to_tensor_dict
+from yago.sampler import (
+    ParallelYagoSampler,
+    YagoSampler,
+    output_signature,
+    sampled_batch_to_tensor_dict,
+)
 
 
 def validate_gpu(allow_cpu: bool) -> None:
@@ -34,7 +46,7 @@ def validate_gpu(allow_cpu: bool) -> None:
             pass
 
 
-def dataset_from_sampler(sampler: YagoSampler, prefetch: int):
+def dataset_from_sampler(sampler, prefetch: int):
     def gen():
         while True:
             yield sampled_batch_to_tensor_dict(sampler.sample_batch())
@@ -43,6 +55,27 @@ def dataset_from_sampler(sampler: YagoSampler, prefetch: int):
         gen,
         output_signature=output_signature(sampler.cfg.sampler.negatives_per_positive),
     ).prefetch(prefetch)
+
+
+def load_valid_int(cfg, max_triples: int):
+    """Map held-out valid triples to compact ints; drop unknowns."""
+    import polars as pl
+    node_map = pl.read_parquet(cfg.paths.node_map_path).sort("node_int")
+    rel_map = pl.read_parquet(cfg.paths.relation_map_path).sort("rel_int")
+    id2int = dict(zip(node_map["node_id"].to_list(), node_map["node_int"].to_list()))
+    rel2int = dict(zip(rel_map["edge_type"].to_list(), rel_map["rel_int"].to_list()))
+    df = pl.read_parquet(cfg.paths.triples_valid_path)
+    if len(df) > max_triples:
+        df = df.sample(n=max_triples, seed=cfg.subset.seed)
+    rows, dropped = [], 0
+    for r in df.iter_rows(named=True):
+        if r["source"] in id2int and r["target"] in id2int and r["edge_type"] in rel2int:
+            rows.append((id2int[r["source"]], rel2int[r["edge_type"]], id2int[r["target"]]))
+        else:
+            dropped += 1
+    arr = np.array(rows, dtype=np.int64)
+    print(f"valid: kept={len(arr):,} dropped_unknown={dropped}")
+    return arr
 
 
 def main() -> None:
@@ -57,6 +90,9 @@ def main() -> None:
     parser.add_argument("--hop1-fanout", type=int, default=None)
     parser.add_argument("--hop2-fanout", type=int, default=None)
     parser.add_argument("--negatives", type=int, default=None)
+    parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--eval-every", type=int, default=None)
+    parser.add_argument("--fast-negatives", action="store_true")
     args = parser.parse_args()
     cfg = make_config(smoke_test=args.smoke_test)
     if args.hop1_fanout is not None:
@@ -76,11 +112,27 @@ def main() -> None:
         cfg.training.xla = True
     if args.learning_rate is not None:
         cfg.training.learning_rate = args.learning_rate
+    if args.workers is not None:
+        cfg.sampler.num_workers = args.workers
+    if args.fast_negatives:
+        cfg.sampler.fast_negatives = True
+    if args.eval_every is not None:
+        cfg.training.eval_every = args.eval_every
 
     validate_gpu(args.allow_cpu)
-    sampler = YagoSampler(cfg)
+    print(f"cfg: steps={cfg.training.steps} batch={cfg.sampler.batch_size} "
+          f"neg={cfg.sampler.negatives_per_positive} fast_neg={cfg.sampler.fast_negatives} "
+          f"fanouts=[{cfg.sampler.hop1_fanout},{cfg.sampler.hop2_fanout}] "
+          f"lr={cfg.training.learning_rate} eval_every={cfg.training.eval_every} "
+          f"workers={cfg.sampler.num_workers} xla={cfg.training.xla}", flush=True)
+    if cfg.sampler.num_workers > 0:
+        sampler = ParallelYagoSampler(cfg, num_workers=cfg.sampler.num_workers)
+        print(f"parallel feeder: {cfg.sampler.num_workers} workers")
+    else:
+        sampler = YagoSampler(cfg)
+    n_edges = sampler.snapshot.num_edges if hasattr(sampler, "snapshot") else -1
     print(f"graph: nodes={sampler.num_nodes:,} relations={sampler.num_relations} "
-          f"node_types={sampler.num_node_types} edges={sampler.snapshot.num_edges:,}")
+          f"node_types={sampler.num_node_types} edges={n_edges:,}")
     ds = dataset_from_sampler(sampler, cfg.training.prefetch)
     model = YagoKGEModel(
         cfg.model,
@@ -101,10 +153,51 @@ def main() -> None:
         opt.apply_gradients(grads_and_vars)
         return loss, tf.shape(graph["nodes"])[0], tf.shape(graph["edges"])[0]
 
+    # Validation scorer over the exported base tables (DistMult, no GNN):
+    # compiled gather+matmul, negatives drawn fresh each eval (fixed seed).
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None,), dtype=tf.int64),
+        tf.TensorSpec(shape=(None,), dtype=tf.int64),
+        tf.TensorSpec(shape=(None,), dtype=tf.int64),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int64),
+    ])
+    def valid_scores(s, r, o_pos, o_neg):
+        E = model.entity_emb.weights[0]
+        R = model.rel_emb.weights[0]
+        pos = tf.reduce_sum(tf.gather(E, s) * tf.gather(R, r) * tf.gather(E, o_pos), axis=-1)
+        neg = tf.reduce_sum(
+            tf.gather(E, tf.reshape(s, (-1, 1))) * tf.reshape(tf.gather(R, r), (-1, 1, 200))
+            * tf.gather(E, o_neg), axis=-1)
+        return pos, neg
+
     # Warmup compile on one batch before timing.
     for g0, l0 in ds.take(1):
         _ = train_step(g0, l0)
     print(f"compiled train_step (xla={cfg.training.xla})")
+
+    valid_arr = load_valid_int(cfg, cfg.training.eval_triples)
+    vrng = np.random.default_rng(12345)
+
+    def run_validation():
+        K = cfg.training.eval_negatives
+        s = valid_arr[:, 0]
+        r = valid_arr[:, 1]
+        o = valid_arr[:, 2]
+        neg_o = vrng.integers(0, sampler.num_nodes, size=(len(s), K), dtype=np.int64)
+        pos, neg = valid_scores(
+            tf.convert_to_tensor(s), tf.convert_to_tensor(r),
+            tf.convert_to_tensor(o), tf.convert_to_tensor(neg_o))
+        pos, neg = pos.numpy(), neg.numpy()
+        ranks = 1 + np.sum(neg >= pos[:, None], axis=1)
+        return float(np.mean(1.0 / ranks)), float(np.mean(ranks <= 10)), float(np.mean(ranks <= 1))
+
+    # Baseline before any update.
+    curves_path = cfg.paths.artifacts_dir / "curves.jsonl"
+    curves = []
+    v_mrr, v_h10, v_h1 = run_validation()
+    curves.append({"step": 0, "train_loss": float("nan"),
+                   "valid_mrr": v_mrr, "valid_hits10": v_h10, "valid_hits1": v_h1})
+    print(f"step=0 valid_mrr={v_mrr:.4f} valid_hits10={v_h10:.4f} valid_hits1={v_h1:.4f}", flush=True)
 
     ckpt_dir = cfg.paths.checkpoints_dir
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -118,13 +211,42 @@ def main() -> None:
             dt = max(time.perf_counter() - t0, 1e-6)
             print(f"step={step} loss={float(loss):.4f} "
                   f"sg_nodes={int(n_nodes)} sg_edges={int(n_edges)} steps_per_s={step/dt:.2f}", flush=True)
-        if step % cfg.training.eval_every == 0:
+        if step % cfg.training.eval_every == 0 or step == cfg.training.steps:
+            v_mrr, v_h10, v_h1 = run_validation()
+            curves.append({"step": step, "train_loss": float(loss),
+                           "valid_mrr": v_mrr, "valid_hits10": v_h10, "valid_hits1": v_h1})
+            with open(curves_path, "a") as fh:
+                fh.write(json.dumps(curves[-1]) + "\n")
+            print(f"step={step} valid_mrr={v_mrr:.4f} valid_hits10={v_h10:.4f} "
+                  f"valid_hits1={v_h1:.4f}", flush=True)
             mgr.save(checkpoint_number=step)
     mgr.save(checkpoint_number=cfg.training.steps)
+
+    # Render train/validation curves.
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    steps = [c["step"] for c in curves[1:]]
+    losses = [c["train_loss"] for c in curves[1:]]
+    base = [c for c in curves]
+    fig, ax1 = plt.subplots(figsize=(10, 4))
+    ax1.plot([c["step"] for c in base], [c["train_loss"] for c in base], "o-", ms=3, label="train loss")
+    ax1.set_xlabel("step"); ax1.set_ylabel("InfoNCE loss"); ax1.legend(loc="upper left")
+    ax2 = ax1.twinx()
+    ax2.plot([c["step"] for c in base], [c["valid_mrr"] for c in base], "s-", ms=3, color="C1", label="valid MRR")
+    ax2.plot([c["step"] for c in base], [c["valid_hits10"] for c in base], "^-", ms=3, color="C2", label="valid Hits@10")
+    ax2.set_ylabel("MRR / Hits@10"); ax2.legend(loc="upper right")
+    plt.title("Train loss vs validation link-prediction (held-out triples)")
+    plt.tight_layout()
+    fig_path = cfg.paths.artifacts_dir / "curves.png"
+    plt.savefig(fig_path, dpi=120)
+    print(f"wrote {curves_path} ({len(curves)} points) + {fig_path}")
 
     # Export 200-d canonical tables.
     from yago.export import export_embeddings
     export_embeddings(cfg, model)
+    if hasattr(sampler, "close"):
+        sampler.close()
     print("done.")
 
 

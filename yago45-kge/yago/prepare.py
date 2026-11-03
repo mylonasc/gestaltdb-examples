@@ -49,7 +49,32 @@ def collect_triples(cfg: AppConfig) -> pl.LazyFrame:
                 break
         lf = lf.filter(pl.col("edge_type").is_in(picked))
     cfg.paths.artifacts_dir.mkdir(parents=True, exist_ok=True)
-    lf.sink_parquet(cfg.paths.triples_parquet)
+    df = lf.collect()
+    # Valid link-prediction split: hold out valid/test triples BEFORE the
+    # snapshot/DB are built, so training never sees them (no leakage into
+    # positives, negatives, or message-passing neighborhoods). Candidates are
+    # restricted to triples whose endpoints occur >= 3 times, so held-out
+    # entities/relations remain observable in train.
+    ent = pl.concat([
+        df.select(pl.col("source").alias("nid")),
+        df.select(pl.col("target").alias("nid")),
+    ]).group_by("nid").len()
+    good = ent.filter(pl.col("len") >= 3).select("nid")
+    pool = df.join(good.rename({"nid": "source"}), on="source", how="semi").join(
+        good.rename({"nid": "target"}), on="target", how="semi")
+    if len(pool) == 0:
+        pool = df
+    n_valid = min(cfg.subset.valid_size, len(pool))
+    n_test = min(cfg.subset.test_size, len(pool) - n_valid)
+    valid = pool.sample(n=n_valid, seed=cfg.subset.seed) if n_valid else pool.clear()
+    rest = df.join(valid, on=["source", "edge_type", "target"], how="anti")
+    pool_rest = rest.join(pool.select(["source", "edge_type", "target"]), on=["source", "edge_type", "target"], how="semi")
+    test = pool_rest.sample(n=n_test, seed=cfg.subset.seed + 1) if n_test else pool_rest.clear()
+    train = rest.join(test, on=["source", "edge_type", "target"], how="anti")
+    train.write_parquet(cfg.paths.triples_parquet)
+    valid.write_parquet(cfg.paths.triples_valid_path)
+    test.write_parquet(cfg.paths.triples_test_path)
+    print(f"split: train={len(train):,} valid={len(valid):,} test={len(test):,}")
     return pl.scan_parquet(cfg.paths.triples_parquet)
 
 

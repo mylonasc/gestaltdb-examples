@@ -7,7 +7,7 @@ from pathlib import Path
 
 @dataclass(slots=True)
 class PathsConfig:
-    project_root: Path = Path(__file__).resolve().parents[1]
+    project_root: Path = Path(__file__).resolve().parents[2]
     data_root: Path | None = None
     tiny_zip: Path | None = None
     full_zip: Path | None = None
@@ -15,6 +15,9 @@ class PathsConfig:
     parquet_dir: Path | None = None
     artifacts_dir: Path | None = None
     triples_parquet: Path | None = None
+    triples_train_path: Path | None = None
+    triples_valid_path: Path | None = None
+    triples_test_path: Path | None = None
     node_map_path: Path | None = None
     relation_map_path: Path | None = None
     edge_arrays_path: Path | None = None
@@ -34,7 +37,10 @@ class PathsConfig:
             "ttl_cache": dr / "ttl",
             "parquet_dir": dr / "parquet_shards",
             "artifacts_dir": dr / "artifacts",
-            "triples_parquet": dr / "artifacts" / "triples.parquet",
+            "triples_parquet": dr / "artifacts" / "triples_train.parquet",
+            "triples_train_path": dr / "artifacts" / "triples_train.parquet",
+            "triples_valid_path": dr / "artifacts" / "triples_valid.parquet",
+            "triples_test_path": dr / "artifacts" / "triples_test.parquet",
             "node_map_path": dr / "artifacts" / "node_map.parquet",
             "relation_map_path": dr / "artifacts" / "relation_map.parquet",
             "edge_arrays_path": dr / "artifacts" / "edge_arrays.npz",
@@ -64,6 +70,8 @@ class SubsetConfig:
     max_relations: int | None = None
     target_edges: int | None = None  # None = keep all entity-entity triples
     max_edges_per_relation: int | None = None  # stratified cap per relation
+    valid_size: int = 10_000  # held-out validation triples (link-prediction split)
+    test_size: int = 10_000  # held-out test triples
     seed: int = 13
 
 
@@ -90,6 +98,10 @@ class SamplerConfig:
     engine_negative_source: str = "context_relation_neighbors"
     max_negative_retries: int = 64
     seed: int = 13
+    num_workers: int = 0  # 0 = single-threaded; >0 = ThreadPool feeder threads
+    worker_prefetch: int = 2  # batches prefetched per worker
+    fast_negatives: bool = False  # numpy random corruptions (no engine rejection)
+    fast_negative_global_fraction: float = 0.5  # share drawn globally vs in-subgraph
 
 
 @dataclass(slots=True)

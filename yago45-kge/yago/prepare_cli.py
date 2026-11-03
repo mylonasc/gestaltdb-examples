@@ -25,6 +25,8 @@ def main() -> None:
     ap.add_argument("--min-relation-edges", type=int, default=None)
     ap.add_argument("--target-edges", type=int, default=None)
     ap.add_argument("--max-edges-per-relation", type=int, default=None)
+    ap.add_argument("--valid-size", type=int, default=None)
+    ap.add_argument("--test-size", type=int, default=None)
     ap.add_argument("--smoke-test", action="store_true")
     ap.add_argument("--data-root", type=str, default=None,
                     help="override data dir (default: data/yago45)")
@@ -41,6 +43,10 @@ def main() -> None:
         cfg.subset.target_edges = args.target_edges
     if args.max_edges_per_relation is not None:
         cfg.subset.max_edges_per_relation = args.max_edges_per_relation
+    if args.valid_size is not None:
+        cfg.subset.valid_size = args.valid_size
+    if args.test_size is not None:
+        cfg.subset.test_size = args.test_size
     ttl = Path(args.ttl) if args.ttl else cfg.paths.tiny_zip
     if not args.skip_parse:
         parse_yago_ttl_to_shards(cfg, ttl, shard_rows=args.shard_rows,

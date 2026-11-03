@@ -57,7 +57,9 @@ Train a knowledge-graph embedding model for YAGO 4.5 with:
 - [x] Fast numpy negatives (51x: 1642ms -> 32ms/batch); threads dropped (GIL-bound)
 - [x] LR 3e-4 + 16 negs (sparse base-table updates); train/val curves JSONL+PNG
 - [~] Big run: 100k steps @ ~8/s, valid MRR 0.085 -> 0.138 @16k — running
-- [ ] Final test eval + curves plot + notebook refresh + push
+- [x] Big run DONE: 100k steps, train loss 2.83 -> ~0.95, valid MRR -> 0.169 / H@10 0.31
+- [x] Fixed eval bug (cosine norm killed signal); final FILTERED TEST: MRR 0.173 / H@1 0.09 / H@10 0.31
+- [x] Notebook refreshed on facts run (curves + t-SNE + heatmap); pushed (ae18056)
 
 ## Notes
 - TF GPU needs LD_LIBRARY_PATH from pip nvidia libs (see gestaltdb example run_training.sh).

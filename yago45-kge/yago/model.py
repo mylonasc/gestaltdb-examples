@@ -37,6 +37,12 @@ class YagoKGEModel(tf.keras.Model):
         )
         self.dropout = tf.keras.layers.Dropout(cfg.dropout)
         self.score_rel = tf.keras.layers.Embedding(num_relations, cfg.hidden_dim, name="score_rel")
+        # Build embedding tables eagerly: validation scores them directly and
+        # shallow (no-GNN) mode never calls rel_emb inside encode().
+        self.entity_emb.build((None,))
+        self.node_type_emb.build((None,))
+        self.rel_emb.build((None,))
+        self.score_rel.build((None,))
 
     def encode(self, graph: dict[str, tf.Tensor], training: bool = False) -> tf.Tensor:
         node_global = tf.cast(graph["nodes"][:, 0], tf.int64)
@@ -44,16 +50,38 @@ class YagoKGEModel(tf.keras.Model):
         edge_rel = tf.cast(graph["edges"][:, 0], tf.int64)
         ent = self.entity_emb(node_global)
         typ = self.node_type_emb(tf.clip_by_value(node_type, 0, 10**9))
+        nodes_in = self.node_proj(tf.concat([ent, typ], axis=-1))
+        if not self.cfg.use_gnn:
+            return self.dropout(nodes_in, training=training)
         graph_in = dict(graph)
-        graph_in["nodes"] = self.node_proj(tf.concat([ent, typ], axis=-1))
+        graph_in["nodes"] = nodes_in
         graph_in["edges"] = self.edge_proj(self.rel_emb(edge_rel))
         out = self.gnn(graph_in)
         return self.dropout(out["nodes"], training=training)
 
+    @staticmethod
+    def _split_complex(x: tf.Tensor):
+        re, im = tf.split(x, 2, axis=-1)
+        return re, im
+
     def _score(self, nodes: tf.Tensor, src: tf.Tensor, rel: tf.Tensor, dst: tf.Tensor) -> tf.Tensor:
+        return self._score_impl(nodes, src, rel, dst, self.cfg.score_function, self.score_rel)
+
+    @staticmethod
+    def _score_impl(nodes, src, rel, dst, score_function, rel_table) -> tf.Tensor:
+        if score_function == "complex":
+            # ComplEx: Re(<h_s, r, conj(h_o)>); 200-d = 100 complex dims.
+            hs_re, hs_im = YagoKGEModel._split_complex(tf.gather(nodes, src))
+            ho_re, ho_im = YagoKGEModel._split_complex(tf.gather(nodes, dst))
+            r_re, r_im = YagoKGEModel._split_complex(rel_table(rel))
+            return tf.reduce_sum(
+                r_re * (hs_re * ho_re + hs_im * ho_im)
+                + r_im * (hs_re * ho_im - hs_im * ho_re),
+                axis=-1,
+            )
         src_h = tf.gather(nodes, src)
         dst_h = tf.gather(nodes, dst)
-        rel_h = self.score_rel(rel)
+        rel_h = rel_table(rel)
         return tf.reduce_sum(src_h * rel_h * dst_h, axis=-1)
 
     def call(self, graph: dict[str, tf.Tensor], labels: dict[str, tf.Tensor], training: bool = False):

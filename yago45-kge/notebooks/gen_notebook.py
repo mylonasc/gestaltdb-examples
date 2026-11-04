@@ -166,6 +166,44 @@ else:
     print("no curves.jsonl (run predates validation logging)")
 '''.strip()))
 
+cells.append(md("""## Class-conditioned t-SNE (the right lens for ComplEx)
+
+ComplEx geometry is per-relation (bilinear), so raw t-SNE colored by a crude
+"dominant relation" proxy looks mixed even for good embeddings. Coloring by
+the *true object of one relation* (gender, nationality) reveals the learned
+class structure. If these plots show clean clusters, the model separated the
+classes; ranking metrics (MRR/Hits) quantify it globally.
+"""))
+
+cells.append(code('''_KEEP = {
+    "schema:gender": ["yago:Male_gender", "yago:Female__u0028_gender_u0029_"],
+    "schema:nationality": ["yago:United_States", "yago:France", "yago:Canada", "yago:Germany", "yago:India"],
+}
+for _rel, _objs in _KEEP.items():
+    _df = triples.filter(pl.col("edge_type") == _rel).select(["source", "target"]).collect()
+    _df = _df.filter(pl.col("target").is_in(_objs))
+    _rows, _labs = [], []
+    for _o in _objs:
+        _c = [s for s in _df.filter(pl.col("target") == _o)["source"].to_list() if s in id_to_row]
+        if not _c:
+            continue
+        _take = list(rng.choice(_c, size=min(600 if len(_objs) <= 2 else 400, len(_c)), replace=False))
+        _rows += _take; _labs += [_o.split(":")[-1][:22]] * len(_take)
+    _X = StandardScaler().fit_transform(E[[id_to_row[s] for s in _rows]])
+    _Z = TSNE(n_components=2, perplexity=30, max_iter=1000,
+              learning_rate="auto", init="pca", random_state=0).fit_transform(_X)
+    plt.figure(figsize=(9, 6))
+    for _lab in sorted(set(_labs)):
+        _m = np.array(_labs) == _lab
+        plt.scatter(_Z[_m, 0], _Z[_m, 1], s=8, alpha=0.75, label=f"{_lab} (n={_m.sum()})")
+    plt.legend(markerscale=3, fontsize=9)
+    plt.title(f"t-SNE of entity embeddings colored by {_rel.split(':')[-1]}")
+    plt.tight_layout()
+    _fn = ART / f"tsne_{_rel.split(':')[-1]}.png"
+    plt.savefig(_fn, dpi=120); plt.show()
+    print("saved", _fn)
+'''.strip()))
+
 cells.append(md("""## Relation–relation cosine structure"""))
 
 cells.append(code('''Rn = R / (np.linalg.norm(R, axis=1, keepdims=True) + 1e-9)

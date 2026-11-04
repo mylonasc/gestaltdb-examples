@@ -21,7 +21,7 @@ import tensorflow as tf
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from yago.config import make_config
-from yago.losses import contrastive_infonce_loss
+from yago.losses import contrastive_infonce_loss, weighted_infonce_loss
 from yago.model import YagoKGEModel
 from yago.sampler import (
     ParallelYagoSampler,
@@ -93,6 +93,10 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--eval-every", type=int, default=None)
     parser.add_argument("--fast-negatives", action="store_true")
+    parser.add_argument("--score", type=str, default=None, choices=["distmult", "complex"])
+    parser.add_argument("--no-gnn", action="store_true")
+    parser.add_argument("--adv-temp", type=float, default=None)
+    parser.add_argument("--aux-weight", type=float, default=None)
     args = parser.parse_args()
     cfg = make_config(smoke_test=args.smoke_test)
     if args.hop1_fanout is not None:
@@ -116,6 +120,14 @@ def main() -> None:
         cfg.sampler.num_workers = args.workers
     if args.fast_negatives:
         cfg.sampler.fast_negatives = True
+    if args.score is not None:
+        cfg.model.score_function = args.score
+    if args.no_gnn:
+        cfg.model.use_gnn = False
+    if args.adv_temp is not None:
+        cfg.model.adv_temperature = args.adv_temp
+    if args.aux_weight is not None:
+        cfg.model.aux_shallow_weight = args.aux_weight
     if args.eval_every is not None:
         cfg.training.eval_every = args.eval_every
 
@@ -143,11 +155,37 @@ def main() -> None:
     opt = tf.keras.optimizers.Adam(learning_rate=cfg.training.learning_rate)
     sig = output_signature(cfg.sampler.negatives_per_positive)
 
+    use_adv = cfg.model.adv_temperature is not None and cfg.model.adv_temperature > 0
+    aux_w = cfg.model.aux_shallow_weight
+
+    def _loss_fn(p, n):
+        if use_adv:
+            return weighted_infonce_loss(p, n, cfg.model.temperature, cfg.model.adv_temperature)
+        return contrastive_infonce_loss(p, n, cfg.model.temperature)
+
     @tf.function(input_signature=sig, reduce_retracing=True, jit_compile=cfg.training.xla)
     def train_step(graph, labels):
         with tf.GradientTape() as tape:
             pos, neg = model(graph, labels, training=True)
-            loss = contrastive_infonce_loss(pos, neg, cfg.model.temperature)
+            loss = _loss_fn(pos, neg)
+            if aux_w > 0:
+                # Shallow auxiliary loss on the EXPORTED base tables (global ids),
+                # so link-prediction structure lands in the artifact, not just GNN states.
+                gids = tf.cast(graph["nodes"][:, 0], tf.int64)
+                ps = tf.gather(gids, labels["positive_src"])
+                pd = tf.gather(gids, labels["positive_dst"])
+                pr = labels["positive_rel"]
+                ns = tf.reshape(tf.gather(gids, tf.reshape(labels["negative_src"], [-1])), tf.shape(labels["negative_src"]))
+                nd = tf.reshape(tf.gather(gids, tf.reshape(labels["negative_dst"], [-1])), tf.shape(labels["negative_dst"]))
+                nr = labels["negative_rel"]
+                base_nodes = model.entity_emb.weights[0]
+                apos = model._score_impl(base_nodes, ps, pr, pd, cfg.model.score_function, model.rel_emb)
+                aneg_flat = model._score_impl(
+                    base_nodes,
+                    tf.reshape(ns, [-1]), tf.reshape(nr, [-1]), tf.reshape(nd, [-1]),
+                    cfg.model.score_function, model.rel_emb)
+                aneg = tf.reshape(aneg_flat, tf.shape(ns))
+                loss = loss + aux_w * _loss_fn(apos, aneg)
         grads = tape.gradient(loss, model.trainable_variables)
         grads_and_vars = [(g, v) for g, v in zip(grads, model.trainable_variables) if g is not None]
         opt.apply_gradients(grads_and_vars)
@@ -155,6 +193,8 @@ def main() -> None:
 
     # Validation scorer over the exported base tables (DistMult, no GNN):
     # compiled gather+matmul, negatives drawn fresh each eval (fixed seed).
+    is_complex = cfg.model.score_function == "complex"
+
     @tf.function(input_signature=[
         tf.TensorSpec(shape=(None,), dtype=tf.int64),
         tf.TensorSpec(shape=(None,), dtype=tf.int64),
@@ -164,10 +204,31 @@ def main() -> None:
     def valid_scores(s, r, o_pos, o_neg):
         E = model.entity_emb.weights[0]
         R = model.rel_emb.weights[0]
-        pos = tf.reduce_sum(tf.gather(E, s) * tf.gather(R, r) * tf.gather(E, o_pos), axis=-1)
-        neg = tf.reduce_sum(
-            tf.gather(E, tf.reshape(s, (-1, 1))) * tf.reshape(tf.gather(R, r), (-1, 1, 200))
-            * tf.gather(E, o_neg), axis=-1)
+        if is_complex:
+            d = int(E.shape[-1]) // 2
+            assert int(E.shape[-1]) % 2 == 0
+            def cx(x):
+                return tf.split(x, 2, axis=-1)
+            s_re, s_im = cx(tf.gather(E, s))
+            o_re, o_im = cx(tf.gather(E, o_pos))
+            r_re, r_im = cx(tf.gather(R, r))
+            pos = tf.reduce_sum(
+                r_re * (s_re * o_re + s_im * o_im)
+                + r_im * (s_re * o_im - s_im * o_re), axis=-1)
+            n_re, n_im = cx(tf.gather(E, o_neg))
+            s_re_b = tf.reshape(s_re, (-1, 1, d))
+            s_im_b = tf.reshape(s_im, (-1, 1, d))
+            r_re_b = tf.reshape(r_re, (-1, 1, d))
+            r_im_b = tf.reshape(r_im, (-1, 1, d))
+            neg = tf.reduce_sum(
+                r_re_b * (s_re_b * n_re + s_im_b * n_im)
+                + r_im_b * (s_re_b * n_im - s_im_b * n_re), axis=-1)
+        else:
+            d_full = int(E.shape[-1])
+            pos = tf.reduce_sum(tf.gather(E, s) * tf.gather(R, r) * tf.gather(E, o_pos), axis=-1)
+            neg = tf.reduce_sum(
+                tf.gather(E, tf.reshape(s, (-1, 1))) * tf.reshape(tf.gather(R, r), (-1, 1, d_full))
+                * tf.gather(E, o_neg), axis=-1)
         return pos, neg
 
     # Warmup compile on one batch before timing.

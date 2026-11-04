@@ -114,6 +114,10 @@ class ModelConfig:
     dropout: float = 0.0
     aggregation_function: str = "mean"
     temperature: float = 0.1
+    score_function: str = "distmult"  # distmult | complex (ComplEx, 200-d = 100 complex)
+    use_gnn: bool = True  # False = shallow KGE ablation (scores projected base tables)
+    adv_temperature: float = 0.0  # <=0 disables self-adversarial negative weighting
+    aux_shallow_weight: float = 0.0  # >0 adds base-table ComplEx/DistMult loss (exported tables learn directly)
 
 
 @dataclass(slots=True)

@@ -24,6 +24,7 @@ def main() -> None:
     ap.add_argument("--smoke-test", action="store_true")
     ap.add_argument("--data-root", type=str, default=None)
     ap.add_argument("--split", type=str, default="test", choices=["test", "valid"])
+    ap.add_argument("--score", type=str, default="complex", choices=["distmult", "complex"])
     args = ap.parse_args()
     cfg = make_config(smoke_test=args.smoke_test)
     if args.data_root:
@@ -62,17 +63,28 @@ def main() -> None:
     rng = np.random.default_rng(0)
     n = min(args.triples, len(tst))
     sel = rng.choice(len(tst), size=n, replace=False)
-    # Standard DistMult scores (raw dot products, NOT cosine: norms carry
-    # signal, matching the training objective and validation protocol).
+    # Standard scores (raw, NOT cosine: norms carry signal). ComplEx =
+    # Re(<s, r, conj(o)>) over 200-d = 100 complex dims; matches training.
+    def batch_scores(s, r, cands):
+        if args.score == "complex":
+            d = E.shape[1] // 2
+            s_re, s_im = E[s, :d], E[s, d:]
+            r_re, r_im = R[r, :d], R[r, d:]
+            o = E[cands]
+            o_re, o_im = o[:, :d], o[:, d:]
+            return np.sum(
+                r_re * (s_re * o_re + s_im * o_im)
+                + r_im * (s_re * o_im - s_im * o_re), axis=1)
+        return np.sum(E[s] * R[r] * E[cands], axis=1)
     ranks = []
     for s, r, o in tst[sel]:
         cand_o = rng.integers(0, len(E), size=args.negatives).tolist()
         cands = [o] + [c for c in cand_o if (s, r, c) not in known_o or c == o]
         cands = cands[: args.negatives + 1]
-        scores = np.sum(E[s] * R[r] * E[cands], axis=1)
+        scores = batch_scores(s, r, cands)
         ranks.append(int(1 + np.sum(scores[1:] >= scores[0])))
     ranks = np.array(ranks)
-    print(f"split={args.split} n={n} MRR={float(np.mean(1.0/ranks)):.4f} "
+    print(f"split={args.split} score={args.score} n={n} MRR={float(np.mean(1.0/ranks)):.4f} "
           f"Hits@1={np.mean(ranks<=1):.4f} Hits@10={np.mean(ranks<=10):.4f} Hits@50={np.mean(ranks<=50):.4f}")
     # Unfiltered random baseline for reference: E[1/rank] over K+1 candidates.
     K = args.negatives

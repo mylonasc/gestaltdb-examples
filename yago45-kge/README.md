@@ -34,11 +34,14 @@ Two trained artifacts are produced in this repo:
   Entity matrix ~3.2GB. Train/validation curves: `artifacts/curves.jsonl`,
   `artifacts/curves.png`.
 
-Train/validation curves (100k steps, 12M-edge facts run) and t-SNE of 4,000
-entity embeddings colored by dominant relation:
+Train/validation curves (150k steps, 12M-edge facts run), dominant-relation
+t-SNE, and class-conditioned t-SNE (gender splits cleanly; nationality shows
+Germany/France clusters):
 
 ![curves](notebooks/figures/curves_facts_12M.png)
 ![t-SNE](notebooks/figures/tsne_facts_4k.png)
+![t-SNE by gender](notebooks/figures/tsne_gender.png)
+![t-SNE by nationality](notebooks/figures/tsne_nationality.png)
 
 ## Method
 

@@ -1,6 +1,6 @@
 import numpy as np
 
-from yago.sampler import mask_supervised_message_edges
+from yago.sampler import SemanticPairIndex, mask_supervised_message_edges
 from yago.scoring import filtered_object_candidates, resolve_score_function, score_objects
 from yago.config import make_config
 
@@ -45,3 +45,15 @@ def test_scorer_metadata_cannot_silently_disagree():
         assert "disagrees" in str(exc)
     else:
         raise AssertionError("mismatched scorer was accepted")
+
+
+def test_semantic_pairs_share_value_and_negatives_do_not():
+    index = SemanticPairIndex.__new__(SemanticPairIndex)
+    # Three contiguous attribute groups: {10,11,12}, {20,21}, {30,31,32,33}.
+    src = np.array([10, 11, 12, 20, 21, 30, 31, 32, 33])
+    starts = np.array([0, 3, 5]); counts = np.array([3, 2, 4])
+    index.relations = [("attribute", src, starts, counts, np.ones(3) / 3)]
+    anchor, positive, negative = index.sample(np.random.default_rng(3), 100, 5)
+    group = {v: i for i, values in enumerate(([10, 11, 12], [20, 21], [30, 31, 32, 33])) for v in values}
+    assert all(group[int(a)] == group[int(p)] and a != p for a, p in zip(anchor, positive))
+    assert all(group[int(a)] != group[int(n)] for a, row in zip(anchor, negative) for n in row)

@@ -35,7 +35,8 @@ def export_embeddings(cfg: AppConfig, model, *, output_dir=None, metadata: dict 
         "relation_key": "relation_base_200d",
         "entity_dim": int(entity_mat.shape[1]),
         "relation_dim": int(rel_mat.shape[1]),
-        "generic_cosine_is_training_objective": False,
+        "generic_cosine_is_training_objective": cfg.model.semantic_weight > 0,
+        "semantic_relations": list(cfg.model.semantic_relations) if cfg.model.semantic_weight > 0 else [],
     }
     if metadata:
         artifact_meta["training_run"] = metadata

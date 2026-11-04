@@ -126,6 +126,25 @@ bash scripts/optuna.sh --data-root data/yago45_facts \
   --study-dir data/yago45_facts/optuna/masked-kge --trials 8 --steps 5000
 ```
 
+The same persistent workflow can tune a warm-started semantic objective while
+holding the validated KGE recipe fixed:
+
+```bash
+bash scripts/optuna.sh --data-root data/yago45_facts \
+  --study-dir data/yago45_facts/optuna/semantic \
+  --semantic-search --objective combined --finetune-recipe --model-variant shallow \
+  --sampler-search hybrid --init-embeddings /path/to/yago45_embeddings_200d.npz
+```
+
+For a selected recipe, `train.py` accepts `--init-embeddings`, `--seed`,
+`--semantic-weight`, `--semantic-temperature`, `--semantic-batch-size`, and
+`--semantic-negatives`. Quantify the resulting generic cosine geometry with:
+
+```bash
+./.venv/bin/python -m yago.semantic_eval --data-root data/yago45_facts \
+  --embeddings /path/to/yago45_embeddings_200d.npz --output /path/to/semantic_eval
+```
+
 ## Performance (RTX 4090, this repo)
 
 | Stage | Throughput |
@@ -180,6 +199,17 @@ Feed-side is sampler-bound (expected: 2-hop expansion + filtered hard negatives
 per batch). Knobs: smaller fanouts, fewer negatives, larger prefetch, and (code-ready)
 thread-pooled prefetch around `sample_batch`.
 
+Use the included feed/compute benchmark rather than GPU-memory occupancy alone:
+
+```bash
+./.venv/bin/python -m yago.bench_feed --data-root data/yago45_facts \
+  --mode all --batches 30 --batch-size 256 --workers 4
+```
+
+Compact semantic run records are under `experiments/`; see
+[`experiments/README.md`](experiments/README.md). Large embedding tables and
+checkpoints remain intentionally excluded.
+
 ## Layout
 
 - `yago/config.py` — all hyper/config (embedding dims: entity 200 / relation 200)
@@ -188,6 +218,9 @@ thread-pooled prefetch around `sample_batch`.
 - `yago/sampler.py` — `YagoSampler` (CSR + hard negatives) -> `tf.data` batch dicts
 - `yago/model.py` — `YagoKGEModel` (tf_gnns MPNN + ComplEx scorer)
 - `yago/losses.py`, `yago/train.py`, `yago/eval.py`, `yago/export.py`
+- `yago/optuna_search.py` — persistent isolated KGE/semantic hyperparameter search
+- `yago/semantic_eval.py` — balanced cosine metrics and reproducible t-SNE plots
+- `yago/bench_feed.py` — feeder, delivery, compute, and end-to-end throughput
 - `scripts/prepare.sh`, `scripts/train.sh`, `scripts/optuna.sh` — GPU entry points
 - `notebooks/01_yago45_embeddings_notes.ipynb` — notes + visualizations
   (relation stats, t-SNE, relation-conditioned retrieval, cosine diagnostic);

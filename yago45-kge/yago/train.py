@@ -22,7 +22,7 @@ import tensorflow as tf
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from yago.config import make_config
-from yago.losses import contrastive_infonce_loss, weighted_infonce_loss
+from yago.losses import cosine_infonce_loss, contrastive_infonce_loss, weighted_infonce_loss
 from yago.model import YagoKGEModel
 from yago.sampler import (
     ParallelYagoSampler,
@@ -54,7 +54,9 @@ def dataset_from_sampler(sampler, prefetch: int):
 
     return tf.data.Dataset.from_generator(
         gen,
-        output_signature=output_signature(sampler.cfg.sampler.negatives_per_positive),
+        output_signature=output_signature(
+            sampler.cfg.sampler.negatives_per_positive,
+            sampler.cfg.model.semantic_negatives),
     ).prefetch(prefetch)
 
 
@@ -92,6 +94,7 @@ def main() -> None:
     parser.add_argument("--hop2-fanout", type=int, default=None)
     parser.add_argument("--negatives", type=int, default=None)
     parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--eval-every", type=int, default=None)
     parser.add_argument("--fast-negatives", action="store_true",
                         help="Deprecated alias for --negative-sampler hybrid")
@@ -100,10 +103,16 @@ def main() -> None:
     parser.add_argument("--no-gnn", action="store_true")
     parser.add_argument("--adv-temp", type=float, default=None)
     parser.add_argument("--aux-weight", type=float, default=None)
+    parser.add_argument("--semantic-weight", type=float, default=None)
+    parser.add_argument("--semantic-temperature", type=float, default=None)
+    parser.add_argument("--semantic-batch-size", type=int, default=None)
+    parser.add_argument("--semantic-negatives", type=int, default=None)
     parser.add_argument("--run-dir", type=str, default=None,
                         help="Write curves/checkpoints/export under this directory")
     parser.add_argument("--no-export", action="store_true")
     parser.add_argument("--no-checkpoints", action="store_true")
+    parser.add_argument("--init-embeddings", type=str, default=None,
+                        help="Initialize base entity/relation tables from an exported NPZ")
     args = parser.parse_args()
     cfg = make_config(smoke_test=args.smoke_test)
     if args.hop1_fanout is not None:
@@ -125,6 +134,8 @@ def main() -> None:
         cfg.training.learning_rate = args.learning_rate
     if args.workers is not None:
         cfg.sampler.num_workers = args.workers
+    if args.seed is not None:
+        cfg.sampler.seed = args.seed
     if args.fast_negatives:
         cfg.sampler.negative_sampler = "hybrid"
     if args.negative_sampler is not None:
@@ -137,6 +148,14 @@ def main() -> None:
         cfg.model.adv_temperature = args.adv_temp
     if args.aux_weight is not None:
         cfg.model.aux_shallow_weight = args.aux_weight
+    if args.semantic_weight is not None:
+        cfg.model.semantic_weight = args.semantic_weight
+    if args.semantic_temperature is not None:
+        cfg.model.semantic_temperature = args.semantic_temperature
+    if args.semantic_batch_size is not None:
+        cfg.model.semantic_batch_size = args.semantic_batch_size
+    if args.semantic_negatives is not None:
+        cfg.model.semantic_negatives = args.semantic_negatives
     if args.eval_every is not None:
         cfg.training.eval_every = args.eval_every
 
@@ -162,8 +181,23 @@ def main() -> None:
         num_node_types=max(2, sampler.num_node_types),
         num_relations=sampler.num_relations,
     )
+    if args.init_embeddings:
+        init_path = Path(args.init_embeddings)
+        init_data = np.load(init_path)
+        meta_path = init_path.parent / "artifact_metadata.json"
+        init_meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+        entity_key = init_meta.get("entity_key", "entity")
+        relation_key = init_meta.get("relation_key", "relation")
+        entity_init, relation_init = init_data[entity_key], init_data[relation_key]
+        if tuple(entity_init.shape) != tuple(model.entity_emb.weights[0].shape):
+            raise ValueError(f"entity init shape {entity_init.shape} != {model.entity_emb.weights[0].shape}")
+        if tuple(relation_init.shape) != tuple(model.rel_emb.weights[0].shape):
+            raise ValueError(f"relation init shape {relation_init.shape} != {model.rel_emb.weights[0].shape}")
+        model.entity_emb.weights[0].assign(entity_init)
+        model.rel_emb.weights[0].assign(relation_init)
+        print(f"initialized base tables from {init_path}")
     opt = tf.keras.optimizers.Adam(learning_rate=cfg.training.learning_rate)
-    sig = output_signature(cfg.sampler.negatives_per_positive)
+    sig = output_signature(cfg.sampler.negatives_per_positive, cfg.model.semantic_negatives)
 
     use_adv = cfg.model.adv_temperature is not None and cfg.model.adv_temperature > 0
     aux_w = cfg.model.aux_shallow_weight
@@ -215,6 +249,14 @@ def main() -> None:
                     cfg.model.score_function, model.rel_emb)
                 aneg = tf.reshape(aneg_flat, tf.shape(ns))
                 loss = loss + aux_w * _loss_fn(apos, aneg)
+            if cfg.model.semantic_weight > 0:
+                table = model.entity_emb.weights[0]
+                sem_a = tf.gather(table, labels["semantic_anchor_global"])
+                sem_p = tf.gather(table, labels["semantic_positive_global"])
+                sem_n = tf.gather(table, labels["semantic_negative_global"])
+                semantic_loss = cosine_infonce_loss(
+                    sem_a, sem_p, sem_n, cfg.model.semantic_temperature)
+                loss = loss + cfg.model.semantic_weight * semantic_loss
         grads = tape.gradient(loss, model.trainable_variables)
         grads_and_vars = [(g, v) for g, v in zip(grads, model.trainable_variables) if g is not None]
         opt.apply_gradients(grads_and_vars)
@@ -267,6 +309,27 @@ def main() -> None:
     valid_arr = load_valid_int(cfg, cfg.training.eval_triples)
     vrng = np.random.default_rng(12345)
 
+    semantic_index = getattr(sampler, "semantic_index", None)
+    if semantic_index is None and hasattr(sampler, "workers"):
+        semantic_index = sampler.workers[0].semantic_index
+
+    def run_semantic_validation():
+        if semantic_index is None:
+            return None, None
+        srng = np.random.default_rng(2026)
+        a, p, n = semantic_index.sample(srng, 2_000, cfg.model.semantic_negatives)
+        ids = np.unique(np.concatenate([a, p, n.reshape(-1)]))
+        vectors = tf.gather(model.entity_emb.weights[0], ids).numpy()
+        vectors /= np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-9
+        pos_map = np.searchsorted(ids, p)
+        anchor_map = np.searchsorted(ids, a)
+        neg_map = np.searchsorted(ids, n)
+        pos_score = np.sum(vectors[anchor_map] * vectors[pos_map], axis=1)
+        neg_score = np.einsum("bd,bkd->bk", vectors[anchor_map], vectors[neg_map])
+        top1 = float(np.mean(pos_score > np.max(neg_score, axis=1)))
+        margin = float(np.mean(pos_score - np.max(neg_score, axis=1)))
+        return top1, margin
+
     def run_validation():
         K = cfg.training.eval_negatives
         s = valid_arr[:, 0]
@@ -287,8 +350,10 @@ def main() -> None:
     curves_path.write_text("")
     curves = []
     v_mrr, v_h10, v_h1 = run_validation()
+    sem_top1, sem_margin = run_semantic_validation()
     curves.append({"step": 0, "train_loss": float("nan"),
-                   "valid_mrr": v_mrr, "valid_hits10": v_h10, "valid_hits1": v_h1})
+                   "valid_mrr": v_mrr, "valid_hits10": v_h10, "valid_hits1": v_h1,
+                   "semantic_top1": sem_top1, "semantic_margin": sem_margin})
     print(f"step=0 valid_mrr={v_mrr:.4f} valid_hits10={v_h10:.4f} valid_hits1={v_h1:.4f}", flush=True)
 
     ckpt_dir = run_dir / "checkpoints"
@@ -306,12 +371,16 @@ def main() -> None:
                   f"sg_nodes={int(n_nodes)} sg_edges={int(n_edges)} steps_per_s={step/dt:.2f}", flush=True)
         if step % cfg.training.eval_every == 0 or step == cfg.training.steps:
             v_mrr, v_h10, v_h1 = run_validation()
+            sem_top1, sem_margin = run_semantic_validation()
             curves.append({"step": step, "train_loss": float(loss),
-                           "valid_mrr": v_mrr, "valid_hits10": v_h10, "valid_hits1": v_h1})
+                           "valid_mrr": v_mrr, "valid_hits10": v_h10, "valid_hits1": v_h1,
+                           "semantic_top1": sem_top1, "semantic_margin": sem_margin})
             with open(curves_path, "a") as fh:
                 fh.write(json.dumps(curves[-1]) + "\n")
             print(f"step={step} valid_mrr={v_mrr:.4f} valid_hits10={v_h10:.4f} "
-                  f"valid_hits1={v_h1:.4f}", flush=True)
+                  f"valid_hits1={v_h1:.4f}" +
+                  (f" semantic_top1={sem_top1:.4f} semantic_margin={sem_margin:.4f}"
+                   if sem_top1 is not None else ""), flush=True)
             if mgr is not None:
                 mgr.save(checkpoint_number=step)
     if mgr is not None:
@@ -343,6 +412,8 @@ def main() -> None:
         "best_step": best["step"],
         "final_valid_mrr": curves[-1]["valid_mrr"],
         "final_valid_hits10": curves[-1]["valid_hits10"],
+        "final_semantic_top1": curves[-1]["semantic_top1"],
+        "final_semantic_margin": curves[-1]["semantic_margin"],
         "steps": cfg.training.steps,
         "elapsed_seconds": time.perf_counter() - t0,
         "model": asdict(cfg.model),

@@ -116,9 +116,16 @@ class ModelConfig:
     aggregation_function: str = "mean"
     temperature: float = 0.1
     score_function: str = "complex"  # distmult | complex (ComplEx, 200-d = 100 complex)
-    use_gnn: bool = True  # False = shallow KGE ablation (scores projected base tables)
+    use_gnn: bool = True  # False = true shallow KGE ablation on exported base tables
     adv_temperature: float = 0.0  # <=0 disables self-adversarial negative weighting
     aux_shallow_weight: float = 1.0  # directly supervises the exported base KGE tables
+    semantic_weight: float = 0.0  # cosine InfoNCE on entities sharing selected attributes
+    semantic_temperature: float = 0.1
+    semantic_batch_size: int = 256
+    semantic_negatives: int = 16
+    semantic_relations: tuple[str, ...] = (
+        "schema:gender", "schema:nationality", "rdf:type",
+    )
 
 
 @dataclass(slots=True)

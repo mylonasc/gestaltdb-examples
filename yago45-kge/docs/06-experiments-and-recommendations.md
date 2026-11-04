@@ -47,9 +47,10 @@ For generic cosine neighbors, add balanced supervised contrastive batches:
 - measure balanced 1-NN and P@10 at every evaluation.
 
 Warm-starting from the validated KGE artifact preserved link prediction better
-than training the semantic objective from scratch. A complete local 20k
-fine-tune improved uniform test MRR to `0.3076`, relation-range MRR to `0.2438`,
-and semantic metrics modestly. Its large artifact was not published.
+than training the semantic objective from scratch. A complete 20k fine-tune
+improved uniform test MRR to `0.3076`, relation-range MRR to `0.2438`, and
+semantic metrics modestly. Compact metrics and curves are published in
+`../experiments/`; its large embedding artifact is not.
 
 ## Suggested next experiment matrix
 

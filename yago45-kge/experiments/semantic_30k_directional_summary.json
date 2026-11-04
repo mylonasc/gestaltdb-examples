@@ -1,0 +1,62 @@
+{
+  "best_valid_mrr": 0.398312974169604,
+  "best_step": 30000,
+  "final_valid_mrr": 0.398312974169604,
+  "final_valid_hits10": 0.544,
+  "final_semantic_top1": 0.5345,
+  "final_semantic_margin": 0.07258091121912003,
+  "steps": 30000,
+  "elapsed_seconds": 3544.3029748990084,
+  "model": {
+    "entity_dim": 200,
+    "relation_dim": 200,
+    "node_type_dim": 32,
+    "hidden_dim": 256,
+    "mp_steps": 2,
+    "dropout": 0.0,
+    "aggregation_function": "mean",
+    "temperature": 0.1,
+    "score_function": "complex",
+    "use_gnn": false,
+    "adv_temperature": 1.413563694141917,
+    "aux_shallow_weight": 0.0,
+    "semantic_weight": 1.807737372015835,
+    "semantic_temperature": 0.08298649338655086,
+    "semantic_batch_size": 256,
+    "semantic_negatives": 16,
+    "semantic_relations": [
+      "schema:gender",
+      "schema:nationality",
+      "rdf:type"
+    ]
+  },
+  "sampler": {
+    "batch_size": 128,
+    "negatives_per_positive": 16,
+    "hop1_fanout": 12,
+    "hop2_fanout": 8,
+    "negative_candidate_fanout": 24,
+    "bfs_direction": "any",
+    "hard_negative_head_probability": 0.5,
+    "same_endpoint_type_negatives": true,
+    "engine_negative_source": "context_relation_neighbors",
+    "max_negative_retries": 64,
+    "seed": 29,
+    "num_workers": 0,
+    "worker_prefetch": 2,
+    "negative_sampler": "hybrid",
+    "mask_supervised_edges": true,
+    "mask_reverse_supervised_edges": true
+  },
+  "training": {
+    "steps": 30000,
+    "learning_rate": 0.0001804964542851384,
+    "log_every": 50,
+    "prefetch": 4,
+    "xla": false,
+    "eval_every": 2000,
+    "eval_triples": 2000,
+    "eval_negatives": 50,
+    "smoke_test": false
+  }
+}

@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import polars as pl
 import tensorflow as tf
 
 from .config import AppConfig
@@ -27,6 +28,62 @@ class SampledBatch:
     # GNN negatives above remain local IDs into this sampled subgraph.
     negative_src_global: np.ndarray
     negative_dst_global: np.ndarray
+    semantic_anchor_global: np.ndarray
+    semantic_positive_global: np.ndarray
+    semantic_negative_global: np.ndarray
+
+
+class SemanticPairIndex:
+    """Balanced attribute groups for cosine-supervised entity sampling."""
+
+    def __init__(self, cfg: AppConfig):
+        rel_map = pl.read_parquet(cfg.paths.relation_map_path)
+        rel_to_int = dict(zip(rel_map["edge_type"].to_list(), rel_map["rel_int"].to_list()))
+        arrays = np.load(cfg.paths.edge_arrays_path, mmap_mode="r")
+        src_all, dst_all, rel_all = arrays["src"], arrays["dst"], arrays["rel"]
+        self.relations = []
+        for name in cfg.model.semantic_relations:
+            if name not in rel_to_int:
+                continue
+            relation = int(rel_to_int[name])
+            mask = rel_all == relation
+            src, dst = src_all[mask], dst_all[mask]
+            order = np.argsort(dst, kind="stable")
+            src, dst = src[order], dst[order]
+            _, starts, counts = np.unique(dst, return_index=True, return_counts=True)
+            valid = counts >= 2
+            starts, counts = starts[valid], counts[valid]
+            if len(starts) >= 2:
+                # sqrt weighting prevents huge classes from dominating without
+                # making extremely rare classes overwhelmingly likely.
+                weights = np.sqrt(counts.astype(np.float64))
+                weights /= weights.sum()
+                self.relations.append((name, src, starts, counts, weights))
+        if not self.relations:
+            raise ValueError(f"none of semantic_relations found: {cfg.model.semantic_relations}")
+
+    def sample(self, rng: np.random.Generator, batch_size: int, negatives: int):
+        anchor = np.empty(batch_size, dtype=np.int64)
+        positive = np.empty(batch_size, dtype=np.int64)
+        negative = np.empty((batch_size, negatives), dtype=np.int64)
+        relation_choice = rng.integers(0, len(self.relations), size=batch_size)
+        for rel_idx in range(len(self.relations)):
+            rows = np.flatnonzero(relation_choice == rel_idx)
+            if not len(rows):
+                continue
+            _, src, starts, counts, weights = self.relations[rel_idx]
+            groups = rng.choice(len(starts), size=len(rows), p=weights)
+            group_counts = counts[groups]
+            first = (rng.random(len(rows)) * group_counts).astype(np.int64)
+            second = (rng.random(len(rows)) * (group_counts - 1)).astype(np.int64)
+            second += second >= first
+            anchor[rows] = src[starts[groups] + first]
+            positive[rows] = src[starts[groups] + second]
+            neg_groups = rng.integers(0, len(starts) - 1, size=(len(rows), negatives))
+            neg_groups += neg_groups >= groups[:, None]
+            offsets = (rng.random((len(rows), negatives)) * counts[neg_groups]).astype(np.int64)
+            negative[rows] = src[starts[neg_groups] + offsets]
+        return anchor, positive, negative
 
 
 def mask_supervised_message_edges(
@@ -62,6 +119,15 @@ class YagoSampler:
         self.snapshot = snapshot if snapshot is not None else build_snapshot(cfg, mode=mode)
         self.engine = SamplerEngine(self.snapshot, seed=cfg.sampler.seed if seed is None else seed)
         self.rng = np.random.default_rng(cfg.sampler.seed if seed is None else seed)
+        self.semantic_index = SemanticPairIndex(cfg) if cfg.model.semantic_weight > 0 else None
+
+    def _semantic_batch(self):
+        if self.semantic_index is None:
+            k = self.cfg.model.semantic_negatives
+            return (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64),
+                    np.empty((0, k), dtype=np.int64))
+        return self.semantic_index.sample(
+            self.rng, self.cfg.model.semantic_batch_size, self.cfg.model.semantic_negatives)
 
     @property
     def num_nodes(self) -> int:
@@ -102,6 +168,7 @@ class YagoSampler:
         gids = batch.node_ids_global
         neg_src = batch.negatives[:, :, 0].astype(np.int64)
         neg_dst = batch.negatives[:, :, 2].astype(np.int64)
+        sem_a, sem_p, sem_n = self._semantic_batch()
         return SampledBatch(
             node_ids=np.arange(batch.n_nodes, dtype=np.int64),
             node_global_ids=batch.node_ids_global,
@@ -117,6 +184,9 @@ class YagoSampler:
             negative_rel=batch.negatives[:, :, 1].astype(np.int64),
             negative_src_global=gids[neg_src],
             negative_dst_global=gids[neg_dst],
+            semantic_anchor_global=sem_a,
+            semantic_positive_global=sem_p,
+            semantic_negative_global=sem_n,
         )
 
     def _masked_context(self, batch):
@@ -164,6 +234,7 @@ class YagoSampler:
         neg_src_global = np.where(head_mask, glob_draws, pos_src_global)
         neg_dst_global = np.where(head_mask, pos_dst_global, glob_draws)
         senders, receivers, edge_rels = self._masked_context(batch)
+        sem_a, sem_p, sem_n = self._semantic_batch()
         return SampledBatch(
             node_ids=np.arange(batch.n_nodes, dtype=np.int64),
             node_global_ids=batch.node_ids_global,
@@ -179,6 +250,9 @@ class YagoSampler:
             negative_rel=neg[:, :, 1],
             negative_src_global=neg_src_global,
             negative_dst_global=neg_dst_global,
+            semantic_anchor_global=sem_a,
+            semantic_positive_global=sem_p,
+            semantic_negative_global=sem_n,
         )
 
 
@@ -202,11 +276,14 @@ def sampled_batch_to_tensor_dict(batch: SampledBatch):
         "negative_rel": tf.convert_to_tensor(batch.negative_rel, dtype=tf.int64),
         "negative_src_global": tf.convert_to_tensor(batch.negative_src_global, dtype=tf.int64),
         "negative_dst_global": tf.convert_to_tensor(batch.negative_dst_global, dtype=tf.int64),
+        "semantic_anchor_global": tf.convert_to_tensor(batch.semantic_anchor_global, dtype=tf.int64),
+        "semantic_positive_global": tf.convert_to_tensor(batch.semantic_positive_global, dtype=tf.int64),
+        "semantic_negative_global": tf.convert_to_tensor(batch.semantic_negative_global, dtype=tf.int64),
     }
     return graph, labels
 
 
-def output_signature(negatives_per_positive: int):
+def output_signature(negatives_per_positive: int, semantic_negatives: int = 16):
     graph_sig = {
         "nodes": tf.TensorSpec(shape=(None, 2), dtype=tf.float32),
         "edges": tf.TensorSpec(shape=(None, 1), dtype=tf.float32),
@@ -225,6 +302,9 @@ def output_signature(negatives_per_positive: int):
         "negative_rel": tf.TensorSpec(shape=(None, negatives_per_positive), dtype=tf.int64),
         "negative_src_global": tf.TensorSpec(shape=(None, negatives_per_positive), dtype=tf.int64),
         "negative_dst_global": tf.TensorSpec(shape=(None, negatives_per_positive), dtype=tf.int64),
+        "semantic_anchor_global": tf.TensorSpec(shape=(None,), dtype=tf.int64),
+        "semantic_positive_global": tf.TensorSpec(shape=(None,), dtype=tf.int64),
+        "semantic_negative_global": tf.TensorSpec(shape=(None, semantic_negatives), dtype=tf.int64),
     }
     return graph_sig, labels_sig
 

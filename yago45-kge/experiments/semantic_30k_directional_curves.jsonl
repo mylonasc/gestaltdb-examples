@@ -1,0 +1,15 @@
+{"step": 2000, "train_loss": 8.809402465820312, "valid_mrr": 0.3174892323753951, "valid_hits10": 0.456, "valid_hits1": 0.234, "semantic_top1": 0.366, "semantic_margin": -0.0025061171036213636}
+{"step": 4000, "train_loss": 9.10166072845459, "valid_mrr": 0.32168095724608925, "valid_hits10": 0.4615, "valid_hits1": 0.24, "semantic_top1": 0.3805, "semantic_margin": 0.004113806877285242}
+{"step": 6000, "train_loss": 9.055301666259766, "valid_mrr": 0.33720004418700666, "valid_hits10": 0.4665, "valid_hits1": 0.262, "semantic_top1": 0.389, "semantic_margin": 0.009958391077816486}
+{"step": 8000, "train_loss": 9.044137954711914, "valid_mrr": 0.3427444290505709, "valid_hits10": 0.478, "valid_hits1": 0.2665, "semantic_top1": 0.4015, "semantic_margin": 0.016204016283154488}
+{"step": 10000, "train_loss": 8.768815994262695, "valid_mrr": 0.35004259571066004, "valid_hits10": 0.484, "valid_hits1": 0.272, "semantic_top1": 0.4105, "semantic_margin": 0.021262062713503838}
+{"step": 12000, "train_loss": 8.821303367614746, "valid_mrr": 0.3528207793397262, "valid_hits10": 0.4835, "valid_hits1": 0.2735, "semantic_top1": 0.4325, "semantic_margin": 0.02682931162416935}
+{"step": 14000, "train_loss": 8.783385276794434, "valid_mrr": 0.35838422326862485, "valid_hits10": 0.4905, "valid_hits1": 0.278, "semantic_top1": 0.4435, "semantic_margin": 0.03248150274157524}
+{"step": 16000, "train_loss": 8.417724609375, "valid_mrr": 0.3614312952111111, "valid_hits10": 0.5015, "valid_hits1": 0.278, "semantic_top1": 0.4595, "semantic_margin": 0.038082703948020935}
+{"step": 18000, "train_loss": 8.40469741821289, "valid_mrr": 0.36687540295006543, "valid_hits10": 0.5045, "valid_hits1": 0.2855, "semantic_top1": 0.469, "semantic_margin": 0.04335440695285797}
+{"step": 20000, "train_loss": 8.400735855102539, "valid_mrr": 0.3676591107517056, "valid_hits10": 0.5135, "valid_hits1": 0.282, "semantic_top1": 0.4825, "semantic_margin": 0.0492500402033329}
+{"step": 22000, "train_loss": 8.257282257080078, "valid_mrr": 0.3815557565275278, "valid_hits10": 0.518, "valid_hits1": 0.3005, "semantic_top1": 0.4945, "semantic_margin": 0.054402146488428116}
+{"step": 24000, "train_loss": 8.072023391723633, "valid_mrr": 0.38079612612104063, "valid_hits10": 0.5275, "valid_hits1": 0.2975, "semantic_top1": 0.5125, "semantic_margin": 0.058931343257427216}
+{"step": 26000, "train_loss": 7.842337608337402, "valid_mrr": 0.38530429902595487, "valid_hits10": 0.529, "valid_hits1": 0.302, "semantic_top1": 0.519, "semantic_margin": 0.06357379257678986}
+{"step": 28000, "train_loss": 7.72259521484375, "valid_mrr": 0.3941296011861325, "valid_hits10": 0.5315, "valid_hits1": 0.3155, "semantic_top1": 0.534, "semantic_margin": 0.06773369759321213}
+{"step": 30000, "train_loss": 7.96386194229126, "valid_mrr": 0.398312974169604, "valid_hits10": 0.544, "valid_hits1": 0.3165, "semantic_top1": 0.5345, "semantic_margin": 0.07258091121912003}

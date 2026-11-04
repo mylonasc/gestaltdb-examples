@@ -1,0 +1,62 @@
+{
+  "embeddings": "data/yago45_facts/runs/semantic-finetune-best-20k-restart/yago45_embeddings_200d.npz",
+  "per_class": 400,
+  "results": [
+    {
+      "relation": "schema:gender",
+      "classes": 2,
+      "entities": 800,
+      "class_values": [
+        "yago:Male_gender",
+        "yago:Female__u0028_gender_u0029_"
+      ],
+      "random_accuracy": 0.5,
+      "cosine_1nn_accuracy": 0.5925,
+      "cosine_precision_at_10": 0.577625,
+      "mean_within_cosine": 0.017552271485328674,
+      "mean_between_cosine": 0.007370046805590391,
+      "cosine_margin": 0.010182224679738283
+    },
+    {
+      "relation": "schema:nationality",
+      "classes": 5,
+      "entities": 2000,
+      "class_values": [
+        "yago:United_States",
+        "yago:France",
+        "yago:Canada",
+        "yago:Germany",
+        "yago:India"
+      ],
+      "random_accuracy": 0.2,
+      "cosine_1nn_accuracy": 0.3,
+      "cosine_precision_at_10": 0.2727,
+      "mean_within_cosine": 0.00980739202350378,
+      "mean_between_cosine": 0.0005018003284931183,
+      "cosine_margin": 0.009305591695010662
+    },
+    {
+      "relation": "rdf:type",
+      "classes": 10,
+      "entities": 4000,
+      "class_values": [
+        "yago:Politician",
+        "yago:Association_football_player",
+        "yago:Album",
+        "yago:Village",
+        "yago:Season__u0028_sports_u0029_",
+        "yago:Writer",
+        "yago:Literary_Work_Q7725634",
+        "yago:Village_Of_Poland_Q3558970",
+        "yago:Single__u0028_music_u0029_",
+        "yago:University_Teacher_Q1622272"
+      ],
+      "random_accuracy": 0.1,
+      "cosine_1nn_accuracy": 0.202,
+      "cosine_precision_at_10": 0.1798,
+      "mean_within_cosine": 0.02122635953128338,
+      "mean_between_cosine": 0.00941665843129158,
+      "cosine_margin": 0.011809701099991798
+    }
+  ]
+}

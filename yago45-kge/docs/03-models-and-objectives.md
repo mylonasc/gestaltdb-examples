@@ -51,8 +51,8 @@ Therefore:
 
 ## Semantic contrastive follow-up
 
-A later local experiment added balanced cosine InfoNCE batches for entities that
-share:
+A later experiment, now represented by compact records in `../experiments/`,
+added balanced cosine InfoNCE batches for entities that share:
 
 - `schema:gender`;
 - `schema:nationality`;

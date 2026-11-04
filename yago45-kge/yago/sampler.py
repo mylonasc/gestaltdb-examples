@@ -23,6 +23,34 @@ class SampledBatch:
     negative_src: np.ndarray
     negative_dst: np.ndarray
     negative_rel: np.ndarray
+    # Global IDs used only by the shallow exported-table objective. Contextual
+    # GNN negatives above remain local IDs into this sampled subgraph.
+    negative_src_global: np.ndarray
+    negative_dst_global: np.ndarray
+
+
+def mask_supervised_message_edges(
+    senders: np.ndarray,
+    receivers: np.ndarray,
+    edge_rel_ids: np.ndarray,
+    positive_src: np.ndarray,
+    positive_dst: np.ndarray,
+    positive_rel: np.ndarray,
+    *,
+    mask_reverse: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Remove labelled triples from the GNN context, including reverse copies."""
+    supervised = set(zip(positive_src.tolist(), positive_rel.tolist(), positive_dst.tolist()))
+    keep = np.fromiter(
+        (
+            (int(s), int(r), int(o)) not in supervised
+            and (not mask_reverse or (int(o), int(r), int(s)) not in supervised)
+            for s, r, o in zip(senders, edge_rel_ids, receivers)
+        ),
+        dtype=bool,
+        count=len(senders),
+    )
+    return senders[keep], receivers[keep], edge_rel_ids[keep]
 
 
 class YagoSampler:
@@ -53,7 +81,7 @@ class YagoSampler:
     def sample_batch(self) -> SampledBatch:
         n_edges = self.snapshot.num_edges
         edge_indices = self.rng.integers(n_edges, size=self.cfg.sampler.batch_size, dtype=np.int64)
-        if self.cfg.sampler.fast_negatives:
+        if self.cfg.sampler.negative_sampler == "hybrid":
             return self._sample_batch_fast(edge_indices)
         batch = self.engine.sample_subgraph(
             edge_indices,
@@ -70,29 +98,48 @@ class YagoSampler:
                 max_retries=self.cfg.sampler.max_negative_retries,
             ),
         )
+        senders, receivers, edge_rels = self._masked_context(batch)
+        gids = batch.node_ids_global
+        neg_src = batch.negatives[:, :, 0].astype(np.int64)
+        neg_dst = batch.negatives[:, :, 2].astype(np.int64)
         return SampledBatch(
             node_ids=np.arange(batch.n_nodes, dtype=np.int64),
             node_global_ids=batch.node_ids_global,
             node_type_ids=batch.node_type_ids,
-            senders=batch.senders,
-            receivers=batch.receivers,
-            edge_rel_ids=batch.edge_relation_ids,
+            senders=senders,
+            receivers=receivers,
+            edge_rel_ids=edge_rels,
             positive_src=batch.positives[:, 0].astype(np.int64),
             positive_dst=batch.positives[:, 2].astype(np.int64),
             positive_rel=batch.positives[:, 1].astype(np.int64),
-            negative_src=batch.negatives[:, :, 0].astype(np.int64),
-            negative_dst=batch.negatives[:, :, 2].astype(np.int64),
+            negative_src=neg_src,
+            negative_dst=neg_dst,
             negative_rel=batch.negatives[:, :, 1].astype(np.int64),
+            negative_src_global=gids[neg_src],
+            negative_dst_global=gids[neg_dst],
+        )
+
+    def _masked_context(self, batch):
+        if not self.cfg.sampler.mask_supervised_edges:
+            return batch.senders, batch.receivers, batch.edge_relation_ids
+        pos = batch.positives.astype(np.int64)
+        return mask_supervised_message_edges(
+            batch.senders,
+            batch.receivers,
+            batch.edge_relation_ids,
+            pos[:, 0],
+            pos[:, 2],
+            pos[:, 1],
+            mask_reverse=self.cfg.sampler.mask_reverse_supervised_edges,
         )
 
     def _sample_batch_fast(self, edge_indices: np.ndarray) -> SampledBatch:
         """Context via engine BFS (~30ms); negatives via numpy corruptions.
 
-        No rejection sampling: a uniform corruption collides with a true train
-        triple with probability ~1e-5, so filtering is skipped (standard
-        practice for in-training negatives). Half the corruptions replace an
-        endpoint with a node from the sampled subgraph (harder), half with a
-        globally uniform node; relations are kept.
+        Contextual negatives are sampled locally because GNN states only exist
+        for subgraph nodes. A second, genuinely global corruption is retained
+        for the auxiliary loss that directly trains the exported base tables.
+        This path does not reject accidental known positives.
         """
         batch = self.engine.sample_subgraph(
             edge_indices,
@@ -104,40 +151,34 @@ class YagoSampler:
         pos = batch.positives.astype(np.int64)  # (B, 3) local (src, rel, dst)
         B = pos.shape[0]
         n_sub = max(int(batch.n_nodes), 1)
-        # In-subgraph draws are local ids; global draws are converted to local
-        # positions (exact when the node is in the subgraph, else a random
-        # local node — ids always stay valid for the model gather).
-        order = np.argsort(batch.node_ids_global)
-        sorted_ids = batch.node_ids_global[order]
+        # Local draws score contextual states. Global draws score base tables.
         sub_draws = self.rng.integers(0, n_sub, size=(B, k), dtype=np.int64)
         glob_draws = self.rng.integers(0, int(self.snapshot.num_nodes), size=(B, k), dtype=np.int64)
-        uniq, inv = np.unique(glob_draws, return_inverse=True)
-        loc = np.searchsorted(sorted_ids, uniq)
-        hit = (loc < n_sub) & (sorted_ids[np.minimum(loc, n_sub - 1)] == uniq)
-        back = np.empty_like(uniq)
-        back[hit] = order[loc[hit]]
-        back[~hit] = self.rng.integers(0, n_sub, size=int((~hit).sum()), dtype=np.int64)
-        glob_local = back[inv].reshape(B, k)
         head_mask = self.rng.random((B, k)) < self.cfg.sampler.hard_negative_head_probability
-        glob_mask = self.rng.random((B, k)) < self.cfg.sampler.fast_negative_global_fraction
-        draws = np.where(glob_mask, glob_local, sub_draws)
         neg = np.empty((B, k, 3), dtype=np.int64)
         neg[:, :, 1] = pos[:, 1:2]
-        neg[:, :, 0] = np.where(head_mask, draws, np.repeat(pos[:, 0:1], k, axis=1))
-        neg[:, :, 2] = np.where(head_mask, np.repeat(pos[:, 2:3], k, axis=1), draws)
+        neg[:, :, 0] = np.where(head_mask, sub_draws, np.repeat(pos[:, 0:1], k, axis=1))
+        neg[:, :, 2] = np.where(head_mask, np.repeat(pos[:, 2:3], k, axis=1), sub_draws)
+        pos_src_global = batch.node_ids_global[pos[:, 0]][:, None]
+        pos_dst_global = batch.node_ids_global[pos[:, 2]][:, None]
+        neg_src_global = np.where(head_mask, glob_draws, pos_src_global)
+        neg_dst_global = np.where(head_mask, pos_dst_global, glob_draws)
+        senders, receivers, edge_rels = self._masked_context(batch)
         return SampledBatch(
             node_ids=np.arange(batch.n_nodes, dtype=np.int64),
             node_global_ids=batch.node_ids_global,
             node_type_ids=batch.node_type_ids,
-            senders=batch.senders,
-            receivers=batch.receivers,
-            edge_rel_ids=batch.edge_relation_ids,
+            senders=senders,
+            receivers=receivers,
+            edge_rel_ids=edge_rels,
             positive_src=pos[:, 0],
             positive_dst=pos[:, 2],
             positive_rel=pos[:, 1],
             negative_src=neg[:, :, 0],
             negative_dst=neg[:, :, 2],
             negative_rel=neg[:, :, 1],
+            negative_src_global=neg_src_global,
+            negative_dst_global=neg_dst_global,
         )
 
 
@@ -159,6 +200,8 @@ def sampled_batch_to_tensor_dict(batch: SampledBatch):
         "negative_src": tf.convert_to_tensor(batch.negative_src, dtype=tf.int64),
         "negative_dst": tf.convert_to_tensor(batch.negative_dst, dtype=tf.int64),
         "negative_rel": tf.convert_to_tensor(batch.negative_rel, dtype=tf.int64),
+        "negative_src_global": tf.convert_to_tensor(batch.negative_src_global, dtype=tf.int64),
+        "negative_dst_global": tf.convert_to_tensor(batch.negative_dst_global, dtype=tf.int64),
     }
     return graph, labels
 
@@ -180,6 +223,8 @@ def output_signature(negatives_per_positive: int):
         "negative_src": tf.TensorSpec(shape=(None, negatives_per_positive), dtype=tf.int64),
         "negative_dst": tf.TensorSpec(shape=(None, negatives_per_positive), dtype=tf.int64),
         "negative_rel": tf.TensorSpec(shape=(None, negatives_per_positive), dtype=tf.int64),
+        "negative_src_global": tf.TensorSpec(shape=(None, negatives_per_positive), dtype=tf.int64),
+        "negative_dst_global": tf.TensorSpec(shape=(None, negatives_per_positive), dtype=tf.int64),
     }
     return graph_sig, labels_sig
 

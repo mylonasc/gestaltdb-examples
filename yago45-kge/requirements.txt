@@ -16,3 +16,5 @@ scikit-learn
 matplotlib
 ipykernel
 nbconvert
+optuna>=4
+pytest

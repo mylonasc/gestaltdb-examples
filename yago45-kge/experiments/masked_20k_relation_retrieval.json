@@ -1,0 +1,151 @@
+{
+  "protocol": "relation-conditioned relation-range retrieval: (subject, relation, ?)",
+  "score_function": "complex",
+  "queries": [
+    {
+      "subject": "yago:Al-Khalil_ibn_Ahmad_al-Farahidi",
+      "relation": "rdf:type",
+      "true_object": "yago:Cryptographer_Q15442776",
+      "true_object_sampled_rank": 16526,
+      "candidate_count": 32749,
+      "top_objects": [
+        [
+          "yago:Provincial_Electoral_District_Of_Quebec_Q2973931",
+          0.10785
+        ],
+        [
+          "yago:Explorer_Q11900058",
+          0.10133
+        ],
+        [
+          "yago:Neurologist",
+          0.09813
+        ],
+        [
+          "yago:Organist",
+          0.09529
+        ],
+        [
+          "yago:Protected_area",
+          0.0888
+        ]
+      ]
+    },
+    {
+      "subject": "yago:La_venenosa",
+      "relation": "schema:actor",
+      "true_object": "yago:Dora_Baret",
+      "true_object_sampled_rank": 4290,
+      "candidate_count": 50001,
+      "top_objects": [
+        [
+          "yago:Thomas_Carter__u0028_director_u0029_",
+          0.60428
+        ],
+        [
+          "yago:Tupac_Shakur",
+          0.60388
+        ],
+        [
+          "yago:Alexandre_Desplat",
+          0.56653
+        ],
+        [
+          "yago:David_Lynch",
+          0.56408
+        ],
+        [
+          "yago:Margarete_Kupfer",
+          0.54505
+        ]
+      ]
+    },
+    {
+      "subject": "yago:Eduard_Rroca",
+      "relation": "schema:gender",
+      "true_object": "yago:Male_gender",
+      "true_object_sampled_rank": 1,
+      "candidate_count": 17,
+      "top_objects": [
+        [
+          "yago:Male_gender",
+          0.01883
+        ],
+        [
+          "yago:Trans_man_generic_instance",
+          0.01606
+        ],
+        [
+          "yago:Transmasculine_generic_instance",
+          0.00875
+        ],
+        [
+          "yago:Non-binary_gender_generic_instance",
+          0.00835
+        ],
+        [
+          "yago:Vakasalewalewa",
+          0.00591
+        ]
+      ]
+    },
+    {
+      "subject": "yago:Budi_Sudarsono",
+      "relation": "schema:memberOf",
+      "true_object": "yago:Persija_Jakarta",
+      "true_object_sampled_rank": 14632,
+      "candidate_count": 43267,
+      "top_objects": [
+        [
+          "yago:FC_St_u002E__Gallen",
+          0.24036
+        ],
+        [
+          "yago:Persenga_Nganjuk",
+          0.22596
+        ],
+        [
+          "yago:FC_Cartagena",
+          0.20959
+        ],
+        [
+          "yago:Preston_North_End_F_u002E_C_u002E_",
+          0.20661
+        ],
+        [
+          "yago:Maes_Pils__u0028_cycling_team_u0029_",
+          0.2028
+        ]
+      ]
+    },
+    {
+      "subject": "yago:Takehisa_Kosugi",
+      "relation": "schema:nationality",
+      "true_object": "yago:Japan",
+      "true_object_sampled_rank": 243,
+      "candidate_count": 259,
+      "top_objects": [
+        [
+          "yago:Austria",
+          0.07317
+        ],
+        [
+          "yago:Mauritius",
+          0.06216
+        ],
+        [
+          "yago:Gabon",
+          0.05908
+        ],
+        [
+          "yago:Spain",
+          0.05458
+        ],
+        [
+          "yago:Libya",
+          0.05394
+        ]
+      ]
+    }
+  ]
+}

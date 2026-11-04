@@ -100,8 +100,9 @@ class SamplerConfig:
     seed: int = 13
     num_workers: int = 0  # 0 = single-threaded; >0 = ThreadPool feeder threads
     worker_prefetch: int = 2  # batches prefetched per worker
-    fast_negatives: bool = False  # numpy random corruptions (no engine rejection)
-    fast_negative_global_fraction: float = 0.5  # share drawn globally vs in-subgraph
+    negative_sampler: str = "hybrid"  # engine | hybrid (local GNN + true-global auxiliary)
+    mask_supervised_edges: bool = True
+    mask_reverse_supervised_edges: bool = True
 
 
 @dataclass(slots=True)
@@ -114,10 +115,10 @@ class ModelConfig:
     dropout: float = 0.0
     aggregation_function: str = "mean"
     temperature: float = 0.1
-    score_function: str = "distmult"  # distmult | complex (ComplEx, 200-d = 100 complex)
+    score_function: str = "complex"  # distmult | complex (ComplEx, 200-d = 100 complex)
     use_gnn: bool = True  # False = shallow KGE ablation (scores projected base tables)
     adv_temperature: float = 0.0  # <=0 disables self-adversarial negative weighting
-    aux_shallow_weight: float = 0.0  # >0 adds base-table ComplEx/DistMult loss (exported tables learn directly)
+    aux_shallow_weight: float = 1.0  # directly supervises the exported base KGE tables
 
 
 @dataclass(slots=True)

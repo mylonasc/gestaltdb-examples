@@ -7,6 +7,7 @@ link-prediction split saved at prepare time (never in the sampler snapshot).
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import os
 import sys
@@ -92,11 +93,17 @@ def main() -> None:
     parser.add_argument("--negatives", type=int, default=None)
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--eval-every", type=int, default=None)
-    parser.add_argument("--fast-negatives", action="store_true")
+    parser.add_argument("--fast-negatives", action="store_true",
+                        help="Deprecated alias for --negative-sampler hybrid")
+    parser.add_argument("--negative-sampler", choices=["engine", "hybrid"], default=None)
     parser.add_argument("--score", type=str, default=None, choices=["distmult", "complex"])
     parser.add_argument("--no-gnn", action="store_true")
     parser.add_argument("--adv-temp", type=float, default=None)
     parser.add_argument("--aux-weight", type=float, default=None)
+    parser.add_argument("--run-dir", type=str, default=None,
+                        help="Write curves/checkpoints/export under this directory")
+    parser.add_argument("--no-export", action="store_true")
+    parser.add_argument("--no-checkpoints", action="store_true")
     args = parser.parse_args()
     cfg = make_config(smoke_test=args.smoke_test)
     if args.hop1_fanout is not None:
@@ -119,7 +126,9 @@ def main() -> None:
     if args.workers is not None:
         cfg.sampler.num_workers = args.workers
     if args.fast_negatives:
-        cfg.sampler.fast_negatives = True
+        cfg.sampler.negative_sampler = "hybrid"
+    if args.negative_sampler is not None:
+        cfg.sampler.negative_sampler = args.negative_sampler
     if args.score is not None:
         cfg.model.score_function = args.score
     if args.no_gnn:
@@ -132,8 +141,9 @@ def main() -> None:
         cfg.training.eval_every = args.eval_every
 
     validate_gpu(args.allow_cpu)
+    tf.keras.utils.set_random_seed(cfg.sampler.seed)
     print(f"cfg: steps={cfg.training.steps} batch={cfg.sampler.batch_size} "
-          f"neg={cfg.sampler.negatives_per_positive} fast_neg={cfg.sampler.fast_negatives} "
+          f"neg={cfg.sampler.negatives_per_positive} negative_sampler={cfg.sampler.negative_sampler} "
           f"fanouts=[{cfg.sampler.hop1_fanout},{cfg.sampler.hop2_fanout}] "
           f"lr={cfg.training.learning_rate} eval_every={cfg.training.eval_every} "
           f"workers={cfg.sampler.num_workers} xla={cfg.training.xla}", flush=True)
@@ -166,21 +176,40 @@ def main() -> None:
     @tf.function(input_signature=sig, reduce_retracing=True, jit_compile=cfg.training.xla)
     def train_step(graph, labels):
         with tf.GradientTape() as tape:
-            pos, neg = model(graph, labels, training=True)
+            if cfg.model.use_gnn:
+                pos, neg = model(graph, labels, training=True)
+            else:
+                # True shallow ablation: score exported tables with global IDs.
+                gids = tf.cast(graph["nodes"][:, 0], tf.int64)
+                ps = tf.gather(gids, labels["positive_src"])
+                pd = tf.gather(gids, labels["positive_dst"])
+                pr = labels["positive_rel"]
+                ns = labels["negative_src_global"]
+                nd = labels["negative_dst_global"]
+                nr = labels["negative_rel"]
+                pos = YagoKGEModel._score_impl(model.entity_emb.weights[0], ps, pr, pd,
+                                               cfg.model.score_function, model.rel_emb)
+                neg_flat = YagoKGEModel._score_impl(
+                    model.entity_emb.weights[0], tf.reshape(ns, [-1]),
+                    tf.reshape(nr, [-1]), tf.reshape(nd, [-1]),
+                    cfg.model.score_function, model.rel_emb)
+                neg = tf.reshape(neg_flat, tf.shape(ns))
             loss = _loss_fn(pos, neg)
-            if aux_w > 0:
+            if aux_w > 0 and cfg.model.use_gnn:
                 # Shallow auxiliary loss on the EXPORTED base tables (global ids),
                 # so link-prediction structure lands in the artifact, not just GNN states.
                 gids = tf.cast(graph["nodes"][:, 0], tf.int64)
                 ps = tf.gather(gids, labels["positive_src"])
                 pd = tf.gather(gids, labels["positive_dst"])
                 pr = labels["positive_rel"]
-                ns = tf.reshape(tf.gather(gids, tf.reshape(labels["negative_src"], [-1])), tf.shape(labels["negative_src"]))
-                nd = tf.reshape(tf.gather(gids, tf.reshape(labels["negative_dst"], [-1])), tf.shape(labels["negative_dst"]))
+                # These are actual global entity IDs. In hybrid mode they need
+                # not occur in the sampled message-passing subgraph.
+                ns = labels["negative_src_global"]
+                nd = labels["negative_dst_global"]
                 nr = labels["negative_rel"]
                 base_nodes = model.entity_emb.weights[0]
-                apos = model._score_impl(base_nodes, ps, pr, pd, cfg.model.score_function, model.rel_emb)
-                aneg_flat = model._score_impl(
+                apos = YagoKGEModel._score_impl(base_nodes, ps, pr, pd, cfg.model.score_function, model.rel_emb)
+                aneg_flat = YagoKGEModel._score_impl(
                     base_nodes,
                     tf.reshape(ns, [-1]), tf.reshape(nr, [-1]), tf.reshape(nd, [-1]),
                     cfg.model.score_function, model.rel_emb)
@@ -191,7 +220,7 @@ def main() -> None:
         opt.apply_gradients(grads_and_vars)
         return loss, tf.shape(graph["nodes"])[0], tf.shape(graph["edges"])[0]
 
-    # Validation scorer over the exported base tables (DistMult, no GNN):
+    # Validation scorer over the exported base tables (ComplEx or DistMult, no GNN):
     # compiled gather+matmul, negatives drawn fresh each eval (fixed seed).
     is_complex = cfg.model.score_function == "complex"
 
@@ -231,9 +260,8 @@ def main() -> None:
                 * tf.gather(E, o_neg), axis=-1)
         return pos, neg
 
-    # Warmup compile on one batch before timing.
-    for g0, l0 in ds.take(1):
-        _ = train_step(g0, l0)
+    # Trace without consuming a batch or applying an unreported optimizer step.
+    _ = train_step.get_concrete_function()
     print(f"compiled train_step (xla={cfg.training.xla})")
 
     valid_arr = load_valid_int(cfg, cfg.training.eval_triples)
@@ -253,17 +281,21 @@ def main() -> None:
         return float(np.mean(1.0 / ranks)), float(np.mean(ranks <= 10)), float(np.mean(ranks <= 1))
 
     # Baseline before any update.
-    curves_path = cfg.paths.artifacts_dir / "curves.jsonl"
+    run_dir = Path(args.run_dir) if args.run_dir else cfg.paths.artifacts_dir
+    run_dir.mkdir(parents=True, exist_ok=True)
+    curves_path = run_dir / "curves.jsonl"
+    curves_path.write_text("")
     curves = []
     v_mrr, v_h10, v_h1 = run_validation()
     curves.append({"step": 0, "train_loss": float("nan"),
                    "valid_mrr": v_mrr, "valid_hits10": v_h10, "valid_hits1": v_h1})
     print(f"step=0 valid_mrr={v_mrr:.4f} valid_hits10={v_h10:.4f} valid_hits1={v_h1:.4f}", flush=True)
 
-    ckpt_dir = cfg.paths.checkpoints_dir
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_dir = run_dir / "checkpoints"
+    if not args.no_checkpoints:
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt = tf.train.Checkpoint(model=model, opt=opt)
-    mgr = tf.train.CheckpointManager(ckpt, str(ckpt_dir), max_to_keep=2)
+    mgr = None if args.no_checkpoints else tf.train.CheckpointManager(ckpt, str(ckpt_dir), max_to_keep=2)
 
     t0 = time.perf_counter()
     for step, (graph, labels) in enumerate(ds.take(cfg.training.steps), start=1):
@@ -280,8 +312,10 @@ def main() -> None:
                 fh.write(json.dumps(curves[-1]) + "\n")
             print(f"step={step} valid_mrr={v_mrr:.4f} valid_hits10={v_h10:.4f} "
                   f"valid_hits1={v_h1:.4f}", flush=True)
-            mgr.save(checkpoint_number=step)
-    mgr.save(checkpoint_number=cfg.training.steps)
+            if mgr is not None:
+                mgr.save(checkpoint_number=step)
+    if mgr is not None:
+        mgr.save(checkpoint_number=cfg.training.steps)
 
     # Render train/validation curves.
     import matplotlib
@@ -299,13 +333,27 @@ def main() -> None:
     ax2.set_ylabel("MRR / Hits@10"); ax2.legend(loc="upper right")
     plt.title("Train loss vs validation link-prediction (held-out triples)")
     plt.tight_layout()
-    fig_path = cfg.paths.artifacts_dir / "curves.png"
+    fig_path = run_dir / "curves.png"
     plt.savefig(fig_path, dpi=120)
     print(f"wrote {curves_path} ({len(curves)} points) + {fig_path}")
 
-    # Export 200-d canonical tables.
-    from yago.export import export_embeddings
-    export_embeddings(cfg, model)
+    best = max(curves, key=lambda c: c["valid_mrr"])
+    summary = {
+        "best_valid_mrr": best["valid_mrr"],
+        "best_step": best["step"],
+        "final_valid_mrr": curves[-1]["valid_mrr"],
+        "final_valid_hits10": curves[-1]["valid_hits10"],
+        "steps": cfg.training.steps,
+        "elapsed_seconds": time.perf_counter() - t0,
+        "model": asdict(cfg.model),
+        "sampler": asdict(cfg.sampler),
+        "training": asdict(cfg.training),
+    }
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+
+    if not args.no_export:
+        from yago.export import export_embeddings
+        export_embeddings(cfg, model, output_dir=run_dir, metadata=summary)
     if hasattr(sampler, "close"):
         sampler.close()
     print("done.")

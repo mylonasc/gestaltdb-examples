@@ -20,23 +20,23 @@ Train a knowledge-graph embedding model for YAGO 4.5 with:
    - `prepare.py`: select relations/entities, build node_map/relation_map/edge_arrays.npz, ingest gestaltdb, build snapshot
    - `sampler.py`: SamplerEngine wrapper -> SampledBatch (2-hop + hard negatives)
    - `batch.py`: sampled_batch_to_tensor_dict + output_signature (tf.data)
-   - `model.py`: KGContrastiveModel (entity 200-d + relation 200-d, GraphNetMPNN_MLP encoder, DistMult-style scorer)
+   - `model.py`: entity/relation 200-d tables, GraphNetMPNN_MLP encoder, ComplEx scorer
    - `losses.py`: InfoNCE contrastive
    - `train.py`: tf.data.from_generator + prefetch + compiled train_step, export embeddings.npz
-   - `export.py`: save entity/relation matrices + maps, nearest-neighbor sanity
-   - `eval.py`: MRR/Hits@k on held-out triples (filtered)
-2. Scripts: `scripts/train.sh`, `scripts/prepare.sh`
+   - `export.py`: named base-table export + scorer metadata + cosine diagnostic
+   - `eval.py`: sampled-filtered MRR/Hits@k on held-out triples
+2. Scripts: `scripts/train.sh`, `scripts/prepare.sh`, persistent Optuna workflow
 3. Data layout: `data/yago45/` (downloads, parquet, artifacts, gestaltdb_rocksdb, sampler_snapshot)
 4. Venv: `./.venv` (TF 2.21 + CUDA via pip nvidia, gestaltdb[fast-ingest], tf_gnns from local path)
 
 ## Model choice
-- GNN-autoencoder (per repo README): shallow entity/relation tables (200-d) -> linear proj to hidden -> 2-3 step GraphNetMPNN_MLP (tf_gnns) -> DistMult scorer `sum(h_s * r * h_o)`.
-- Loss: InfoNCE over 1 positive + K hard negatives (in-batch contrastive per README).
+- GNN-autoencoder: shallow 200-d tables -> projection -> masked 2-step GraphNetMPNN_MLP -> ComplEx scorer.
+- Loss: contextual InfoNCE plus shallow ComplEx InfoNCE directly on exported tables.
 - Data: SamplerEngine.sample_subgraph 2-hop neighborhoods + hard negatives (reject known positives, same-type).
 - Compile: `@tf.function(input_signature, jit_compile=FLAG, reduce_retracing=True)` at app level (never inside tf_gnns).
 - Feed: tf.data.Dataset.from_generator(pre-fetch) with explicit output_signature; sampler is array-backed CSR (no KV reads in hot path).
 
-## Status (2026-11-03)
+## Status (2026-11-04)
 - [x] Inspect gestaltdb/tf_gnns reference (example/gnn_kg)
 - [x] Create venv + install deps (TF 2.21 CUDA, gestaltdb, tf_gnns editable)
 - [x] Download tiny + validate Turtle parser (23.2M lines -> 352k entity-entity)
@@ -56,7 +56,17 @@ Train a knowledge-graph embedding model for YAGO 4.5 with:
 - [x] Facts v2: 12.0M train / 10k valid / 10k test, 25 rels, 4.18M nodes; snapshot OK
 - [x] Fast numpy negatives (51x: 1642ms -> 32ms/batch); threads dropped (GIL-bound)
 - [x] LR 3e-4 + 16 negs (sparse base-table updates); train/val curves JSONL+PNG
-- [x] v4 (complex+adv+aux1.0, bs128): valid MRR 0.088 -> 0.269 @10k, 0.268 @26k — running to 150k
+- [x] v4 (complex+adv+aux1.0, bs128) trained to 150k steps
+- [x] v4 completed at 150k: historical sampled valid MRR 0.473, test MRR 0.467 (50 negatives)
+- [x] Audit fixes: mask supervised/reverse message edges; repair known-positive filtering; align scorer defaults and persist metadata
+- [x] Replace primary generic cosine example with relation-conditioned ComplEx retrieval; retain cosine as diagnostic
+- [x] Split hybrid negatives into local contextual corruptions and true-global shallow-table corruptions
+- [x] Add regression tests and Optuna SQLite/run-directory workflow
+- [x] Controlled 50-step masked comparison: engine MRR 0.0816 in 7m; hybrid MRR 0.0839 in 51s overall (9.3s timed loop)
+- [x] Four-trial hybrid Optuna tuning @1k: best masked valid MRR 0.1025 (LR 5.04e-4, bs128, 16 neg, adv 1.414, aux 1.003)
+- [x] Fixed-budget @1k: shallow 0.1025, masked GNN-only 0.0941, masked GNN+aux 0.1041 MRR
+- [x] 20k best-recipe masked run: best valid MRR 0.2743; test uniform 0.2770; relation-range 0.2198
+- [x] Corrected notebook executed (28 cells, 10 figures, no errors); final code/results ready to publish
 
 ## Notes
 - TF GPU needs LD_LIBRARY_PATH from pip nvidia libs (see gestaltdb example run_training.sh).

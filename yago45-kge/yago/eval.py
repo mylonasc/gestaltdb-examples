@@ -1,12 +1,13 @@
-"""Link-prediction eval on the HELD-OUT TEST split (filtered MRR / Hits@k).
+"""Link-prediction eval on the held-out split (sampled-filtered MRR / Hits@k).
 
 Test triples were excluded from the sampler snapshot at prepare time, so this
 measures generalization. Filtered: train/valid positives sharing (s, r) are
-removed from the candidate list before ranking (standard filtered protocol).
+removed from each sampled candidate list before ranking.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from yago.config import make_config
+from yago.scoring import filtered_object_candidates, resolve_score_function, score_objects
 
 
 def main() -> None:
@@ -24,15 +26,30 @@ def main() -> None:
     ap.add_argument("--smoke-test", action="store_true")
     ap.add_argument("--data-root", type=str, default=None)
     ap.add_argument("--split", type=str, default="test", choices=["test", "valid"])
-    ap.add_argument("--score", type=str, default="complex", choices=["distmult", "complex"])
+    ap.add_argument("--score", type=str, default=None, choices=["distmult", "complex"],
+                    help="Override artifact scorer (an inconsistent override is rejected)")
+    ap.add_argument("--embeddings", type=str, default=None)
+    ap.add_argument("--candidate-policy", choices=["uniform", "relation-range"],
+                    default="uniform",
+                    help="relation-range samples objects observed with that relation (harder)")
     args = ap.parse_args()
     cfg = make_config(smoke_test=args.smoke_test)
     if args.data_root:
         from yago.config import PathsConfig as _PC
         cfg.paths = _PC(data_root=Path(args.data_root))
     import polars as pl
-    data = np.load(cfg.paths.embeddings_path)
-    E, R = data["entity"].astype(np.float32), data["relation"].astype(np.float32)
+    embeddings_path = Path(args.embeddings) if args.embeddings else cfg.paths.embeddings_path
+    metadata_path = embeddings_path.parent / "artifact_metadata.json"
+    artifact_meta = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
+    trained_score = artifact_meta.get("score_function")
+    try:
+        score_function = resolve_score_function(args.score, trained_score)
+    except ValueError as exc:
+        ap.error(str(exc))
+    data = np.load(embeddings_path)
+    entity_key = artifact_meta.get("entity_key", "entity")
+    relation_key = artifact_meta.get("relation_key", "relation")
+    E, R = data[entity_key].astype(np.float32), data[relation_key].astype(np.float32)
     node_map = pl.read_parquet(cfg.paths.node_map_path).sort("node_int")
     rel_map = pl.read_parquet(cfg.paths.relation_map_path).sort("rel_int")
     id2int = dict(zip(node_map["node_id"].to_list(), node_map["node_int"].to_list()))
@@ -63,28 +80,24 @@ def main() -> None:
     rng = np.random.default_rng(0)
     n = min(args.triples, len(tst))
     sel = rng.choice(len(tst), size=n, replace=False)
-    # Standard scores (raw, NOT cosine: norms carry signal). ComplEx =
-    # Re(<s, r, conj(o)>) over 200-d = 100 complex dims; matches training.
-    def batch_scores(s, r, cands):
-        if args.score == "complex":
-            d = E.shape[1] // 2
-            s_re, s_im = E[s, :d], E[s, d:]
-            r_re, r_im = R[r, :d], R[r, d:]
-            o = E[cands]
-            o_re, o_im = o[:, :d], o[:, d:]
-            return np.sum(
-                r_re * (s_re * o_re + s_im * o_im)
-                + r_im * (s_re * o_im - s_im * o_re), axis=1)
-        return np.sum(E[s] * R[r] * E[cands], axis=1)
+    relation_objects = {}
+    if args.candidate_policy == "relation-range":
+        for relation in np.unique(tst[sel, 1]):
+            relation_objects[int(relation)] = np.unique(train[train[:, 1] == relation, 2])
     ranks = []
     for s, r, o in tst[sel]:
-        cand_o = rng.integers(0, len(E), size=args.negatives).tolist()
-        cands = [o] + [c for c in cand_o if (s, r, c) not in known_o or c == o]
-        cands = cands[: args.negatives + 1]
-        scores = batch_scores(s, r, cands)
+        if args.candidate_policy == "relation-range":
+            pool = relation_objects[int(r)]
+            cand_o = rng.choice(pool, size=args.negatives, replace=len(pool) < args.negatives)
+        else:
+            cand_o = rng.integers(0, len(E), size=args.negatives)
+        cands = filtered_object_candidates(s, r, o, cand_o, known_o)[: args.negatives + 1]
+        scores = score_objects(E, R, s, r, cands, score_function)
         ranks.append(int(1 + np.sum(scores[1:] >= scores[0])))
     ranks = np.array(ranks)
-    print(f"split={args.split} score={args.score} n={n} MRR={float(np.mean(1.0/ranks)):.4f} "
+    print(f"protocol=sampled-filtered policy={args.candidate_policy} split={args.split} "
+          f"score={score_function} candidates<={args.negatives + 1} "
+          f"n={n} MRR={float(np.mean(1.0/ranks)):.4f} "
           f"Hits@1={np.mean(ranks<=1):.4f} Hits@10={np.mean(ranks<=10):.4f} Hits@50={np.mean(ranks<=50):.4f}")
     # Unfiltered random baseline for reference: E[1/rank] over K+1 candidates.
     K = args.negatives

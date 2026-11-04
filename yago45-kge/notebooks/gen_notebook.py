@@ -21,14 +21,14 @@ This notebook documents the `yago45-kge` example and visualizes the trained
 
 - **Data**: YAGO 4.5 Turtle → entity–entity triples (literals/labels dropped) →
   GestaltDB (RocksDB) ingest → CSR `SamplerSnapshot`.
-- **Model**: trainable entity `[N,200]` + relation `[R,200]` tables → 2-step
-  `tf_gnns.GraphNetMPNN_MLP` encoder → DistMult scorer `sum(h_s · r · h_o)`,
-  InfoNCE loss over 1 positive + 8 hard negatives from `SamplerEngine`.
+- **Model**: trainable entity `[N,200]` + relation `[R,200]` tables → masked
+  2-step `tf_gnns.GraphNetMPNN_MLP` encoder → ComplEx scorer, plus a shallow
+  ComplEx objective directly supervising the exported base tables.
 - **Training**: compiled `@tf.function` step; `tf.data` feed from array-backed CSR
   (no KV reads in the hot path).
-- **Runs**: `data/yago45` (tiny: 352k triples / 300k entities / 57 relations,
-  5k steps) and `data/yago45_facts` (8.0M triples / 3.64M entities / 27 relations,
-  8k steps). Set `USE_FACTS = True` below to visualize the facts run
+- **Runs**: `data/yago45` (tiny: 352k triples / 300k entities / 57 relations)
+  and `data/yago45_facts` (12.0M train triples / 4.18M entities / 25 relations,
+  final published run: 150k steps). Set `USE_FACTS = True` below to visualize the facts run
   (needs ~4 GB RAM for the entity matrix).
 """))
 
@@ -53,7 +53,8 @@ name = "yago45_facts" if USE_FACTS else "yago45"
 cands = [(ex / ".." / "data" / name).resolve(), ex / "data" / name]
 DATA_ROOT = next(p for p in cands if p.exists())
 ART = DATA_ROOT / "artifacts"
-print("DATA_ROOT:", DATA_ROOT)
+RUN_ART = Path(os.environ.get("YAGO_RUN_ARTIFACTS", ART))
+print("DATA_ROOT:", DATA_ROOT, "RUN_ART:", RUN_ART)
 '''.strip()))
 
 cells.append(code('''import json
@@ -86,9 +87,11 @@ We sample entities stratified by their *dominant incident relation* so the
 t-SNE plot tests whether the contrastive objective separated relational roles.
 """))
 
-cells.append(code('''data = np.load(ART / "yago45_embeddings_200d.npz")
-E, R = data["entity"].astype(np.float64), data["relation"].astype(np.float64)
+cells.append(code('''data = np.load(RUN_ART / "yago45_embeddings_200d.npz")
+E = data["entity_base_200d" if "entity_base_200d" in data else "entity"].astype(np.float32)
+R = data["relation_base_200d" if "relation_base_200d" in data else "relation"].astype(np.float32)
 ids = data["node_ids"].tolist()
+relation_ids = data["relation_ids"].tolist()
 print("entity", E.shape, "relation", R.shape)
 assert E.shape[1] == 200 and R.shape[1] == 200
 print("finite:", np.isfinite(E).all(), np.isfinite(R).all())
@@ -140,14 +143,14 @@ print("saved", out)
 
 cells.append(md("""## Train / validation curves (held-out triples)
 
-Logged every `eval_every` steps during training. Base-table DistMult scores on
-the held-out split (never in the sampler snapshot): unfiltered ranking over
-1 positive + 50 random negatives. If `curves.jsonl` is missing, the run
+Logged every `eval_every` steps during training. Base-table ComplEx scores on
+the held-out split (never in the sampler snapshot): sampled ranking over
+1 positive + 50 random negatives. This is not full-candidate MRR. If `curves.jsonl` is missing, the run
 predates validation logging.
 """))
 
 cells.append(code('''import json as _json
-curves_file = ART / "curves.jsonl"
+curves_file = RUN_ART / "curves.jsonl"
 if curves_file.exists():
     curves = [_json.loads(l) for l in curves_file.read_text().splitlines()]
     cdf = pl.DataFrame(curves)
@@ -164,6 +167,69 @@ if curves_file.exists():
     plt.title("Train loss vs validation link-prediction"); plt.tight_layout(); plt.show()
 else:
     print("no curves.jsonl (run predates validation logging)")
+'''.strip()))
+
+cells.append(md("""## Negative-sampler control
+
+A seeded 50-step comparison uses the same masked GNN recipe for both samplers.
+It is a throughput check, not a converged-quality comparison.
+"""))
+
+cells.append(code('''control_file = ex / "experiments" / "masked_negative_control.csv"
+if control_file.exists():
+    control = pl.read_csv(control_file)
+    print(control)
+    fig, axes = plt.subplots(1, 2, figsize=(9, 3.5))
+    axes[0].bar(control["sampler"], control["training_seconds"])
+    axes[0].set_ylabel("Timed training seconds (50 steps)"); axes[0].set_title("Sampler throughput")
+    axes[1].bar(control["sampler"], control["best_valid_mrr"])
+    axes[1].set_ylabel("Best sampled valid MRR"); axes[1].set_ylim(.078, .086)
+    axes[1].set_title("Short-run quality (not converged)")
+    plt.tight_layout(); plt.show()
+else:
+    print("control CSV not present")
+'''.strip()))
+
+cells.append(md("""### Optuna hybrid tuning
+
+Four 1,000-step masked trials tune learning rate, batch size, negative count,
+self-adversarial temperature, and shallow auxiliary weight. The SQLite study,
+per-trial logs, summaries, and curves remain local; the compact CSV is published.
+"""))
+
+cells.append(code('''tuning_file = ex / "experiments" / "optuna_masked_hybrid_1k.csv"
+if tuning_file.exists():
+    tuning = pl.read_csv(tuning_file)
+    print(tuning.sort("value", descending=True))
+    fig, axes = plt.subplots(1, 2, figsize=(9, 3.5))
+    axes[0].bar(tuning["number"].cast(pl.String), tuning["value"])
+    axes[0].set_xlabel("Optuna trial"); axes[0].set_ylabel("Best sampled valid MRR")
+    axes[1].scatter(tuning["param_learning_rate"], tuning["value"], s=60)
+    axes[1].set_xscale("log"); axes[1].set_xlabel("Learning rate")
+    axes[1].set_ylabel("Best sampled valid MRR")
+    plt.tight_layout(); plt.show()
+else:
+    print("tuning CSV not present")
+'''.strip()))
+
+cells.append(md("""### Fixed-budget model ablation
+
+The true shallow path scores the exported 200-d tables directly with global
+corruptions. All variants use the same split, seed, optimizer recipe and 1,000
+updates. Validation measures the exported base tables.
+"""))
+
+cells.append(code('''ablation_file = ex / "experiments" / "masked_model_ablation_1k.csv"
+if ablation_file.exists():
+    ablation = pl.read_csv(ablation_file)
+    print(ablation)
+    plt.figure(figsize=(8, 3.8))
+    plt.bar(ablation["model"], ablation["valid_mrr"])
+    plt.xticks(rotation=15, ha="right"); plt.ylabel("Sampled valid MRR")
+    plt.title("Fixed-split masked ablation (1,000 steps)")
+    plt.tight_layout(); plt.show()
+else:
+    print("ablation CSV not present")
 '''.strip()))
 
 cells.append(md("""## Class-conditioned t-SNE (the right lens for ComplEx)
@@ -218,7 +284,62 @@ plt.title("Relation embedding cosine similarity (top-20 relations)")
 plt.colorbar(label="cosine"); plt.tight_layout(); plt.show()
 '''.strip()))
 
-cells.append(md("""## Nearest neighbors (spot check)"""))
+cells.append(md("""## Relation-conditioned retrieval (the primary KGE query)
+
+Knowledge-graph embeddings answer **(subject, relation, ?)**. The following
+uses the trained ComplEx function and candidates observed in that relation's
+object range. It is the
+correct counterpart to training; generic entity-to-entity cosine is not.
+
+These are the first matching held-out rows, not cherry-picked successes. Mixed
+ranks are expected at 20k steps; aggregate sampled-filtered metrics are the
+quality measure, while these rows make failures inspectable.
+"""))
+
+cells.append(code('''id_to_row = {v: i for i, v in enumerate(ids)}
+rel_to_row = {v: i for i, v in enumerate(relation_ids)}
+
+def complex_object_scores(subject, relation, candidates):
+    s, r = E[subject], R[relation]
+    d = E.shape[1] // 2
+    sr, si = s[:d], s[d:]; rr, ri = r[:d], r[d:]
+    o = E[np.asarray(candidates)]; ore, oim = o[:, :d], o[:, d:]
+    return np.sum(rr * (sr * ore + si * oim) + ri * (sr * oim - si * ore), axis=1)
+
+heldout = pl.read_parquet(ART / "triples_test.parquet")
+examples = heldout.filter(pl.col("edge_type").is_in([
+    "schema:gender", "schema:nationality", "schema:birthPlace", "rdf:type"
+])).head(4)
+for row in examples.iter_rows(named=True):
+    if row["source"] not in id_to_row or row["target"] not in id_to_row or row["edge_type"] not in rel_to_row:
+        continue
+    s, r, target = id_to_row[row["source"]], rel_to_row[row["edge_type"]], id_to_row[row["target"]]
+    pool_ids = (triples.filter(pl.col("edge_type") == row["edge_type"])
+                .select("target").unique().collect()["target"].to_list())
+    pool = np.array([id_to_row[x] for x in pool_ids if x in id_to_row], dtype=np.int64)
+    candidates = rng.choice(pool, size=min(50_000, len(pool)), replace=False)
+    candidates = np.unique(np.r_[target, candidates])
+    scores = complex_object_scores(s, r, candidates)
+    order = np.argsort(-scores)[:5]
+    target_score = scores[np.where(candidates == target)[0][0]]
+    target_rank = 1 + int(np.sum(scores > target_score))
+    print(f"\\n({row['source']}, {row['edge_type']}, ?) true={row['target']} sampled_rank={target_rank}/{len(candidates)}")
+    for j in order:
+        print(f"  {ids[int(candidates[j])]}  score={scores[j]:.3f}")
+'''.strip()))
+
+cells.append(code('''evaluation_file = ex / "experiments" / "masked_test_evaluation.csv"
+if evaluation_file.exists():
+    print("Corrected held-out test evaluation (2,000 triples):")
+    display(pl.read_csv(evaluation_file))
+'''.strip()))
+
+cells.append(md("""## Raw cosine neighbors (diagnostic only)
+
+This calculation is valid, but ComplEx never asks related entities to have high
+ordinary cosine similarity. Do **not** interpret this report as the model's
+link-prediction output or as semantic retrieval quality.
+"""))
 
 cells.append(code('''En = E / (np.linalg.norm(E, axis=1, keepdims=True) + 1e-9)
 def nn(name, k=5):
@@ -230,17 +351,20 @@ for q in [ids[i] for i in rng.choice(len(ids), size=3, replace=False)]:
     for nid, sc in nn(q): print(f"   {nid}  {sc}")
 '''.strip()))
 
-cells.append(md("""## Notes / next steps
+cells.append(md("""## Notes
 
-- NN cosine values (~0.3) and relation-mixed t-SNE regions reflect a short run
-  (5k/8k steps, ~6% triple coverage). More steps, larger batches, and a
-  relation-aware encoder tighten clusters.
-- The exported `entity` matrix is the canonical 200-d artifact (row-aligned
-  with `node_ids`); the GNN refines representations *during* training, and the
-  base table is what gets updated end-to-end.
+- `entity_base_200d` and `relation_base_200d` are base KGE tables optimized by
+  the shallow auxiliary ComplEx loss. They are not contextual GNN outputs.
+- Exact supervised edges are masked from message passing. Contextual negatives
+  are local; hybrid sampling uses genuinely global IDs for the shallow loss.
+- Use relation-conditioned scoring for KGE retrieval. Raw cosine remains only
+  a diagnostic unless a separate cosine/contrastive objective is trained.
 - To reproduce: `bash scripts/prepare.sh [--reset-db]` then
   `bash scripts/train.sh [--steps N --batch-size B]`; see `README.md`.
 """))
+
+for i, cell in enumerate(cells):
+    cell["id"] = f"yago45-{i:03d}"
 
 nb = {"nbformat": 4, "nbformat_minor": 5,
       "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},

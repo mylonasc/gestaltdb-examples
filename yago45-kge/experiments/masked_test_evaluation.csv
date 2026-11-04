@@ -1,0 +1,3 @@
+candidate_policy,negatives,mrr,hits1,hits10,hits50
+uniform,50,0.2770,0.2005,0.4080,0.8780
+relation-range,50,0.2198,0.1330,0.3765,0.9260

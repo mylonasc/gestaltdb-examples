@@ -49,10 +49,12 @@ class YagoKGEModel(tf.keras.Model):
         node_type = tf.cast(graph["nodes"][:, 1], tf.int64)
         edge_rel = tf.cast(graph["edges"][:, 0], tf.int64)
         ent = self.entity_emb(node_global)
+        if not self.cfg.use_gnn:
+            # True shallow KGE ablation: score the exported 200-d tables
+            # directly, without node types, projection or contextualization.
+            return self.dropout(ent, training=training)
         typ = self.node_type_emb(tf.clip_by_value(node_type, 0, 10**9))
         nodes_in = self.node_proj(tf.concat([ent, typ], axis=-1))
-        if not self.cfg.use_gnn:
-            return self.dropout(nodes_in, training=training)
         graph_in = dict(graph)
         graph_in["nodes"] = nodes_in
         graph_in["edges"] = self.edge_proj(self.rel_emb(edge_rel))
@@ -65,7 +67,8 @@ class YagoKGEModel(tf.keras.Model):
         return re, im
 
     def _score(self, nodes: tf.Tensor, src: tf.Tensor, rel: tf.Tensor, dst: tf.Tensor) -> tf.Tensor:
-        return self._score_impl(nodes, src, rel, dst, self.cfg.score_function, self.score_rel)
+        rel_table = self.score_rel if self.cfg.use_gnn else self.rel_emb
+        return self._score_impl(nodes, src, rel, dst, self.cfg.score_function, rel_table)
 
     @staticmethod
     def _score_impl(nodes, src, rel, dst, score_function, rel_table) -> tf.Tensor:

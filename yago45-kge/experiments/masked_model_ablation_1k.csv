@@ -1,0 +1,4 @@
+model,steps,valid_mrr,valid_hits1,valid_hits10
+shallow ComplEx,1000,0.10249505379467332,0.034,0.2095
+masked GNN only,1000,0.0941354729739352,0.023,0.208
+masked GNN + auxiliary,1000,0.10406349615238956,0.034,0.218

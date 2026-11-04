@@ -1,0 +1,139 @@
+{
+  "source": "/home/charilaos/Workspace/gestaltdb-examples/data/yago45/yago-4.5.0.2-tiny.zip",
+  "sha256": "c9e52cf0338c9dd6586f4d601b02398fef55253a2be94dcace8ae9115f0d889d",
+  "lines": 23260739,
+  "temporal_predicates": {
+    "schema:birthDate": 159623,
+    "schema:deathDate": 72239,
+    "schema:dateCreated": 68293,
+    "schema:startDate": 1504,
+    "schema:dissolutionDate": 3168,
+    "schema:endDate": 1123
+  },
+  "reified_statement_lines": 0,
+  "potential_availability_predicates": {},
+  "temporal_split_used": false,
+  "reason": "Static YAGO snapshot; entity/event dates are not timestamps of fact availability. No chronological ordering is inferred from Turtle line order or birth/death dates.",
+  "most_common_predicates": [
+    [
+      "rdfs:label",
+      13566706
+    ],
+    [
+      "rdfs:comment",
+      4535804
+    ],
+    [
+      "schema:mainEntityOfPage",
+      2595289
+    ],
+    [
+      "schema:alternateName",
+      1084452
+    ],
+    [
+      "schema:sameAs",
+      406887
+    ],
+    [
+      "rdfs:subClassOf",
+      166334
+    ],
+    [
+      "schema:birthDate",
+      159623
+    ],
+    [
+      "rdf:type",
+      154649
+    ],
+    [
+      "schema:image",
+      127579
+    ],
+    [
+      "schema:deathDate",
+      72239
+    ],
+    [
+      "schema:dateCreated",
+      68293
+    ],
+    [
+      "schema:geo",
+      61068
+    ],
+    [
+      "schema:url",
+      47404
+    ],
+    [
+      "schema:parentTaxon",
+      36541
+    ],
+    [
+      "schema:location",
+      18980
+    ],
+    [
+      "yago:populationNumber",
+      18648
+    ],
+    [
+      "yago:elevation",
+      16391
+    ],
+    [
+      "yago:area",
+      14590
+    ],
+    [
+      "schema:memberOf",
+      14453
+    ],
+    [
+      "schema:postalCode",
+      13473
+    ],
+    [
+      "schema:birthPlace",
+      6197
+    ],
+    [
+      "schema:superEvent",
+      4832
+    ],
+    [
+      "schema:knowsLanguage",
+      4655
+    ],
+    [
+      "schema:nationality",
+      4612
+    ],
+    [
+      "schema:actor",
+      4394
+    ],
+    [
+      "schema:duration",
+      4262
+    ],
+    [
+      "yago:neighbors",
+      4010
+    ],
+    [
+      "schema:logo",
+      3233
+    ],
+    [
+      "schema:dissolutionDate",
+      3168
+    ],
+    [
+      "schema:alumniOf",
+      3018
+    ]
+  ]
+}

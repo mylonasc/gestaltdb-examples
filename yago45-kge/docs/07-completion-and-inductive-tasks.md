@@ -1,5 +1,10 @@
 # KG Completion, Updates, and Inductive Tasks
 
+The limitations below describe the historical ID-input model. A separate,
+implemented ID-independent pipeline is now available; see
+[Inductive graph autoencoder](09-inductive-autoencoder.md) for training and
+checkpoint-backed GNN link prediction on unseen entities.
+
 ## KG completion with existing entities
 
 The exported ComplEx tables support link prediction immediately:

@@ -3,6 +3,7 @@ import numpy as np
 from yago.sampler import SemanticPairIndex, mask_supervised_message_edges
 from yago.scoring import filtered_object_candidates, resolve_score_function, score_objects
 from yago.config import make_config
+from yago.train import checkpoint_number, load_curves_through_step, write_curves
 
 
 def test_quality_defaults_are_scorer_aligned():
@@ -57,3 +58,13 @@ def test_semantic_pairs_share_value_and_negatives_do_not():
     group = {v: i for i, values in enumerate(([10, 11, 12], [20, 21], [30, 31, 32, 33])) for v in values}
     assert all(group[int(a)] == group[int(p)] and a != p for a, p in zip(anchor, positive))
     assert all(group[int(a)] != group[int(n)] for a, row in zip(anchor, negative) for n in row)
+
+
+def test_resume_curves_are_trimmed_to_checkpoint(tmp_path):
+    path = tmp_path / "curves.jsonl"
+    write_curves(path, [{"step": 0}, {"step": 100}, {"step": 200}])
+    assert load_curves_through_step(path, 100) == [{"step": 0}, {"step": 100}]
+
+
+def test_checkpoint_number_uses_tensorflow_suffix():
+    assert checkpoint_number("/run/checkpoints/ckpt-12000") == 12_000

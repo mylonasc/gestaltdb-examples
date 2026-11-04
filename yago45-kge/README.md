@@ -11,6 +11,12 @@ Detailed lessons from this work—including correctness, sampling, semantic
 geometry, KG completion, and inductive inference—are collected in
 [`docs/`](docs/README.md).
 
+For **unseen-entity GNN link prediction**, use the new independent
+[inductive autoencoder pipeline](docs/09-inductive-autoencoder.md). It trains an
+ID-independent relational encoder and ComplEx decoder, also exports useful
+shallow KGE embeddings, and supports full checkpoint resume and contextual GNN
+evaluation on entity-held-out support/query splits. Existing runs remain unchanged.
+
 ## Result
 
 - `data/yago45/artifacts/yago45_embeddings_200d.npz`:
@@ -96,6 +102,8 @@ bash scripts/prepare.sh --reset-db
 bash scripts/train.sh --smoke-test
 # 3. Full training (default: 5000 steps, batch 64, 8 hybrid negatives)
 bash scripts/train.sh --steps 5000 --batch-size 64
+# Resume an interrupted run to a total of 5000 steps (same run directory)
+bash scripts/train.sh --steps 5000 --batch-size 64 --resume
 # 4. Relation-conditioned link prediction (sampled-filtered MRR / Hits@k)
 ./.venv/bin/python -m yago.eval --triples 2000 --negatives 50
 # 5. Serve demo
@@ -114,7 +122,11 @@ reverse copies) are removed from each GNN message graph.
 Useful flags: `prepare.sh --ttl <file.zip|file.ttl> --limit-lines N --min-relation-edges K
 --target-edges M --max-edges-per-relation C --valid-size V --test-size T
 --skip-ingest --skip-parse`; `train.sh --negative-sampler {engine,hybrid} --negatives 16
---learning-rate 3e-4 --workers 0 --eval-every 2000 --xla --allow-cpu`.
+--learning-rate 3e-4 --workers 0 --eval-every 2000 --xla --allow-cpu --resume`.
+
+Checkpoints contain the model, optimizer, and completed-step counter. `--resume`
+loads the latest checkpoint from `<run-dir>/checkpoints`, preserves curve history,
+and interprets `--steps` as the target total rather than additional steps.
 
 `engine` uses GestaltDB's filtered, endpoint-type-aware hard negatives. `hybrid`
 uses local corruptions for contextual GNN states and genuinely global entity IDs

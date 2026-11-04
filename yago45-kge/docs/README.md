@@ -26,6 +26,7 @@ those goals and their evaluation protocols separate.
 6. [Experiments and recommended training recipe](06-experiments-and-recommendations.md)
 7. [KG completion, updates, and inductive tasks](07-completion-and-inductive-tasks.md)
 8. [Reproducibility and operational checklist](08-reproducibility-checklist.md)
+9. [Inductive graph autoencoder: prepare, train, resume, and GNN evaluation](09-inductive-autoencoder.md)
 
 ## Scope and evidence
 

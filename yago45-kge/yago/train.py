@@ -10,6 +10,7 @@ import argparse
 from dataclasses import asdict
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -81,6 +82,35 @@ def load_valid_int(cfg, max_triples: int):
     return arr
 
 
+def load_curves_through_step(path: Path, max_step: int) -> list[dict]:
+    """Load valid JSONL curve records that belong to the restored checkpoint."""
+    if not path.exists():
+        return []
+    curves = []
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            print(f"WARNING: ignoring malformed {path}:{line_number}", flush=True)
+            continue
+        if int(record.get("step", -1)) <= max_step:
+            curves.append(record)
+    return curves
+
+
+def write_curves(path: Path, curves: list[dict]) -> None:
+    text = "".join(json.dumps(record) + "\n" for record in curves)
+    path.write_text(text)
+
+
+def checkpoint_number(path: str) -> int:
+    """Read the step suffix from a TensorFlow checkpoint path."""
+    match = re.search(r"-(\d+)$", path)
+    return int(match.group(1)) if match else 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke-test", action="store_true")
@@ -111,9 +141,15 @@ def main() -> None:
                         help="Write curves/checkpoints/export under this directory")
     parser.add_argument("--no-export", action="store_true")
     parser.add_argument("--no-checkpoints", action="store_true")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume model, optimizer, step, and curves from the latest run checkpoint")
     parser.add_argument("--init-embeddings", type=str, default=None,
                         help="Initialize base entity/relation tables from an exported NPZ")
     args = parser.parse_args()
+    if args.resume and args.no_checkpoints:
+        parser.error("--resume cannot be combined with --no-checkpoints")
+    if args.resume and args.init_embeddings:
+        parser.error("--resume cannot be combined with --init-embeddings")
     cfg = make_config(smoke_test=args.smoke_test)
     if args.hop1_fanout is not None:
         cfg.sampler.hop1_fanout = args.hop1_fanout
@@ -197,6 +233,7 @@ def main() -> None:
         model.rel_emb.weights[0].assign(relation_init)
         print(f"initialized base tables from {init_path}")
     opt = tf.keras.optimizers.Adam(learning_rate=cfg.training.learning_rate)
+    completed_steps = tf.Variable(0, dtype=tf.int64, trainable=False, name="completed_steps")
     sig = output_signature(cfg.sampler.negatives_per_positive, cfg.model.semantic_negatives)
 
     use_adv = cfg.model.adv_temperature is not None and cfg.model.adv_temperature > 0
@@ -343,28 +380,61 @@ def main() -> None:
         ranks = 1 + np.sum(neg >= pos[:, None], axis=1)
         return float(np.mean(1.0 / ranks)), float(np.mean(ranks <= 10)), float(np.mean(ranks <= 1))
 
-    # Baseline before any update.
+    # Run state. Checkpoints include the optimizer and completed step, allowing
+    # interrupted runs to continue rather than merely reload model weights.
     run_dir = Path(args.run_dir) if args.run_dir else cfg.paths.artifacts_dir
     run_dir.mkdir(parents=True, exist_ok=True)
     curves_path = run_dir / "curves.jsonl"
-    curves_path.write_text("")
-    curves = []
-    v_mrr, v_h10, v_h1 = run_validation()
-    sem_top1, sem_margin = run_semantic_validation()
-    curves.append({"step": 0, "train_loss": float("nan"),
-                   "valid_mrr": v_mrr, "valid_hits10": v_h10, "valid_hits1": v_h1,
-                   "semantic_top1": sem_top1, "semantic_margin": sem_margin})
-    print(f"step=0 valid_mrr={v_mrr:.4f} valid_hits10={v_h10:.4f} valid_hits1={v_h1:.4f}", flush=True)
-
     ckpt_dir = run_dir / "checkpoints"
     if not args.no_checkpoints:
         ckpt_dir.mkdir(parents=True, exist_ok=True)
-    ckpt = tf.train.Checkpoint(model=model, opt=opt)
+    ckpt = tf.train.Checkpoint(model=model, opt=opt, completed_steps=completed_steps)
     mgr = None if args.no_checkpoints else tf.train.CheckpointManager(ckpt, str(ckpt_dir), max_to_keep=2)
 
+    start_step = 0
+    if args.resume:
+        latest = mgr.latest_checkpoint
+        if latest is None:
+            raise FileNotFoundError(f"--resume requested, but no checkpoint exists in {ckpt_dir}")
+        # Models and optimizer slots have been created by train_step tracing, so
+        # this eagerly restores all current variables. expect_partial() also
+        # permits checkpoints made before completed_steps was added.
+        ckpt.restore(latest).expect_partial()
+        start_step = int(completed_steps.numpy()) or checkpoint_number(latest)
+        completed_steps.assign(start_step)
+        print(f"resumed {latest} at completed step {start_step:,}", flush=True)
+    elif mgr is not None and mgr.latest_checkpoint is not None:
+        print(f"WARNING: existing checkpoint ignored; use --resume to continue {mgr.latest_checkpoint}", flush=True)
+
+    if start_step > cfg.training.steps:
+        raise ValueError(
+            f"checkpoint is at step {start_step}, beyond requested --steps {cfg.training.steps}")
+
+    if args.resume:
+        curves = load_curves_through_step(curves_path, start_step)
+        # Remove records newer than the restored state (possible if interruption
+        # occurred after metric output but before its checkpoint save).
+        write_curves(curves_path, curves)
+    else:
+        curves = []
+        write_curves(curves_path, curves)
+
+    # Validate a fresh run, or a restored checkpoint without a matching curve.
+    if not curves or int(curves[-1].get("step", -1)) != start_step:
+        v_mrr, v_h10, v_h1 = run_validation()
+        sem_top1, sem_margin = run_semantic_validation()
+        curves.append({"step": start_step, "train_loss": float("nan"),
+                       "valid_mrr": v_mrr, "valid_hits10": v_h10, "valid_hits1": v_h1,
+                       "semantic_top1": sem_top1, "semantic_margin": sem_margin})
+        write_curves(curves_path, curves)
+        print(f"step={start_step} valid_mrr={v_mrr:.4f} valid_hits10={v_h10:.4f} "
+              f"valid_hits1={v_h1:.4f}", flush=True)
+
     t0 = time.perf_counter()
-    for step, (graph, labels) in enumerate(ds.take(cfg.training.steps), start=1):
+    remaining_steps = cfg.training.steps - start_step
+    for step, (graph, labels) in enumerate(ds.take(remaining_steps), start=start_step + 1):
         loss, n_nodes, n_edges = train_step(graph, labels)
+        completed_steps.assign(step)
         if step == 1 or step % cfg.training.log_every == 0:
             dt = max(time.perf_counter() - t0, 1e-6)
             print(f"step={step} loss={float(loss):.4f} "
@@ -384,7 +454,7 @@ def main() -> None:
             if mgr is not None:
                 mgr.save(checkpoint_number=step)
     if mgr is not None:
-        mgr.save(checkpoint_number=cfg.training.steps)
+        mgr.save(checkpoint_number=int(completed_steps.numpy()))
 
     # Render train/validation curves.
     import matplotlib
@@ -415,6 +485,8 @@ def main() -> None:
         "final_semantic_top1": curves[-1]["semantic_top1"],
         "final_semantic_margin": curves[-1]["semantic_margin"],
         "steps": cfg.training.steps,
+        "resumed_from_step": start_step,
+        "steps_run_this_invocation": remaining_steps,
         "elapsed_seconds": time.perf_counter() - t0,
         "model": asdict(cfg.model),
         "sampler": asdict(cfg.sampler),

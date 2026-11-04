@@ -154,6 +154,16 @@ def parse_yago_ttl_to_shards(
         s = line.strip()
         if not s or s.startswith("#") or s.startswith("@"):
             continue
+        # The large archive is dominated by labels/descriptions. Reject these
+        # before the full triple regex, rather than matching gigabytes of text
+        # that the structural KG pipeline will immediately discard.
+        parts = s.split(None, 2)
+        if len(parts) < 3:
+            continue
+        if parts[1] in skip_pred or parts[1].startswith(skip_pref):
+            continue
+        if parts[2].startswith(('"', "'")) or not _is_entity_subject(parts[0]):
+            continue
         m = _TRIPLE_RE.match(s)
         if not m:
             continue
@@ -183,6 +193,7 @@ def parse_yago_ttl_to_shards(
         kept += 1
         if len(srcs) >= shard_rows:
             flush()
+            print(f"scanned_lines={scanned:,} retained={kept:,} shards={len(written)}", flush=True)
     flush()
     print(f"scanned_lines={scanned:,} kept_entity_entity={kept:,} shards={len(written)}")
     return written

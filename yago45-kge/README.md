@@ -7,6 +7,10 @@ reusable CSR sampler snapshot, encodes them with a compiled
 200-dimensional entity (and relation) embeddings with an in-batch contrastive
 (GNN-autoencoder style) loss.
 
+Detailed lessons from this work—including correctness, sampling, semantic
+geometry, KG completion, and inductive inference—are collected in
+[`docs/`](docs/README.md).
+
 ## Result
 
 - `data/yago45/artifacts/yago45_embeddings_200d.npz`:

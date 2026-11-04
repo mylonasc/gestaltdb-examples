@@ -1,0 +1,5 @@
+trial,state,value,learning_rate,temperature,negative_policy,best_step
+0,COMPLETE,0.41087887527579753,0.001,0.1,uniform,1500
+1,COMPLETE,0.4428455960002151,0.001,0.1,mixed,1500
+2,COMPLETE,0.45515040684790675,0.003,0.05,mixed,1000
+3,COMPLETE,0.5269181030386046,0.001,0.1,relation-range,1500

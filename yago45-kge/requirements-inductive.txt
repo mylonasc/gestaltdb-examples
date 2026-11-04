@@ -1,0 +1,15 @@
+# Versions used for the November 2026 GPU experiments.
+tensorflow[and-cuda]==2.21.0
+keras==3.15.1
+tf_keras==2.21.0
+tensorflow_probability==0.25.0
+tf_gnns==0.3.2
+gestaltdb==0.17.0
+numpy==2.5.4
+scipy==1.18.1
+polars==2.1.0
+pyarrow==26.0.1
+scikit-learn==1.9.1
+matplotlib==3.11.2
+optuna==5.0.0
+pytest==9.2.0

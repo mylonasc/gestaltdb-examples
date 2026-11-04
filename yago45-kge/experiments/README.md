@@ -4,6 +4,21 @@ This directory contains compact, machine-readable evidence from the YAGO 4.5
 experiments. Multi-gigabyte embedding tables, optimizer state, and sampler data
 are intentionally excluded from Git.
 
+## Inductive graph autoencoder
+
+- `inductive_optuna_1500.csv`: four equal-budget, validation-only trials on the
+  tiny graph's entity-held-out dataset. Objective: contextual GNN relation-range
+  sampled-filtered tail MRR, 300 validation queries and up to 50 negatives.
+  Full masked relation-count features and relation-range training negatives
+  selected LR `0.001`, temperature `0.1`, best validation MRR `0.5269`.
+- `inductive_source_audit.json`: audit of the tiny release, which lacks actual
+  triple-level temporal metadata. The full archive separately contains
+  `yago-meta-facts.ntx`; see the temporal pipeline documentation.
+
+The selected run is extended separately from the short-budget search. Full graph
+experiments retain all parsed structural entity-to-entity facts without edge caps.
+No inductive test metrics are used by the search.
+
 ## Corrected masked KGE
 
 - `masked_negative_control.csv`: equal-budget GestaltDB-engine versus hybrid

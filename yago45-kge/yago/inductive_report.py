@@ -71,6 +71,10 @@ def plot_curves(run_dir, output):
     axes[0].legend()
     axes[1].plot([row["step"] for row in curves], [row["mrr"] for row in curves], "o-", label="GNN validation MRR")
     axes[1].plot([row["step"] for row in curves], [row["hits10"] for row in curves], "o-", label="GNN validation Hits@10")
+    if curves[-1].get("candidate_policy") == "both":
+        for policy in ("uniform", "relation-range"):
+            axes[1].plot([row["step"] for row in curves],
+                         [row["per_policy"][policy]["mrr"] for row in curves], "--", label=f"{policy} MRR")
     axes[1].set(xlabel="Completed optimizer steps", ylabel="Sampled-filtered metric",
                 title=f"Validation: {curves[-1].get('candidate_policy', 'uniform')} candidates")
     axes[1].legend()
@@ -183,8 +187,8 @@ def main():
     edges = np.concatenate([data["train"], data["support"]])
     context = NeighborhoodGraph(edges, len(data["node_ids"]), len(data["relation_ids"]),
                                 snapshot_path=args.run_dir / "snapshots" / "test"
-                                if spec.get("sampler") == "gestaltdb" else None,
-                                feature_mode=spec.get("feature_mode", "sampled"))
+                                if spec.get("sampler", "").startswith("gestaltdb") else None,
+                                feature_mode=spec.get("feature_mode", "sampled"), compact=spec.get("sampler") == "gestaltdb-csr")
     pool = np.unique(edges[:, [0, 2]])
     known = GraphKnownObjects(context, *(data[key] for key in ("valid", "test", "temporal_valid", "temporal_test") if key in data))
     tf.keras.utils.set_random_seed(spec["seed"])
@@ -212,11 +216,19 @@ def main():
         print(f"trained {policy}: MRR={result['mrr']:.4f}", flush=True)
     results["no_message_relation_range"] = evaluate(model, context, data["test"], known, pool,
         fanouts=spec["fanouts"], negatives=args.negatives, max_queries=args.triples,
-        candidate_policy="relation-range", message_passing=False)
+        candidate_policy="relation-range", message_passing=False, include_details=True)
+    trained_details = json.loads((args.output / "test_relation-range_details.json").read_text())["details"]
+    no_message_details = results["no_message_relation_range"].pop("details")
+    differences = np.asarray([1 / trained["rank"] - 1 / ablated["rank"]
+                              for trained, ablated in zip(trained_details, no_message_details)])
+    bootstrap = np.random.default_rng(13).choice(differences, (1000, len(differences)), replace=True).mean(axis=1)
+    results["message_passing_gain"] = dict(mean_delta_mrr=float(differences.mean()),
+                                           paired_bootstrap_ci95=np.quantile(bootstrap, [.025, .975]).tolist())
+    (args.output / "no_message_details.json").write_text(json.dumps(no_message_details))
     if "temporal_test" in data and len(data["temporal_test"]):
         temporal_context = NeighborhoodGraph(data["train"], len(data["node_ids"]), len(data["relation_ids"]),
-            snapshot_path=args.run_dir / "snapshots" / "train" if spec.get("sampler") == "gestaltdb" else None,
-            feature_mode=spec.get("feature_mode", "sampled"))
+            snapshot_path=args.run_dir / "snapshots" / "train" if spec.get("sampler", "").startswith("gestaltdb") else None,
+            feature_mode=spec.get("feature_mode", "sampled"), compact=spec.get("sampler") == "gestaltdb-csr")
         temporal_known = GraphKnownObjects(temporal_context, *(data[key] for key in
             ("valid", "test", "temporal_valid", "temporal_test")))
         for policy in ("uniform", "relation-range"):
@@ -252,6 +264,17 @@ def main():
               "", "![Shallow embeddings t-SNE](shallow_tsne.png)", "",
               "t-SNE labels describe observed neighborhoods and are diagnostic, not a semantic benchmark.",
               "See summary.json for confidence intervals, frequency/random controls, per-relation and support-degree groups."]
+    table += ["", "## Candidate calibration and controls", "",
+              "| Policy | GNN MRR | Frequency MRR (pessimistic ties) | Frequency MRR (expected ties) | Random expected MRR |",
+              "|---|---:|---:|---:|---:|"]
+    for policy in ("uniform", "relation-range"):
+        result = results[f"trained_{policy}"]
+        table.append(f"| {policy} | {result['mrr']:.4f} | {result['frequency_pessimistic_mrr']:.4f} | "
+                     f"{result['frequency_mrr']:.4f} | {result['random_mrr']:.4f} |")
+    if results["trained_uniform"]["mrr"] < results["trained_uniform"]["frequency_pessimistic_mrr"]:
+        table += ["", "**Limitation:** this checkpoint underperforms the frequency control on global uniform candidates. "
+                  "Strong relation-range results must not be presented as good candidate-independent completion. "
+                  "Training-negative policy and checkpoint-selection policy matter."]
     (args.output / "README.md").write_text("\n".join(table) + "\n")
     print(f"report written to {args.output}", flush=True)
 

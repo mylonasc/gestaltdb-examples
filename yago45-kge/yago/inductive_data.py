@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import OrderedDict
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -85,7 +87,7 @@ class NeighborhoodGraph:
     All YAGO nodes currently have the same generic Entity type.
     """
 
-    def __init__(self, edges, num_nodes, num_relations, snapshot_path=None, feature_mode="sampled"):
+    def __init__(self, edges, num_nodes, num_relations, snapshot_path=None, feature_mode="sampled", compact=False):
         self.edges = np.asarray(edges, dtype=np.int64)
         self.num_nodes = num_nodes
         self.num_relations = num_relations
@@ -106,9 +108,36 @@ class NeighborhoodGraph:
         self.snapshot = None
         if snapshot_path is not None:
             from pathlib import Path
-            from gestaltdb.sampling import SamplerSnapshot
-            fingerprint = hashlib.sha256(self.edges.tobytes() + str((num_nodes, num_relations)).encode()).hexdigest()[:16]
+            digest = hashlib.sha256(str((num_nodes, num_relations)).encode())
+            for start in range(0, len(edges), 1000000):
+                digest.update(np.ascontiguousarray(self.edges[start:start + 1000000]).tobytes())
+            fingerprint = digest.hexdigest()[:16]
             path = Path(snapshot_path) / fingerprint
+            if compact:
+                # Only directional CSR is used by pre-masked sampling. The full
+                # SamplerSnapshot also writes external-ID lookups, membership,
+                # relation indexes and weights, which are unnecessary here and
+                # can exceed available disk on hundred-million-edge graphs.
+                from gestaltdb.sampling.adjacency import CSRAdjacency, build_csr
+                path.mkdir(parents=True, exist_ok=True)
+                if not (path / "metadata.json").exists():
+                    edge_ids = np.arange(len(edges), dtype=np.int64)
+                    for direction, keys in (("out", s), ("in", o)):
+                        csr = build_csr(keys, edge_ids, num_nodes)
+                        np.save(path / f"{direction}_indptr.npy", csr.indptr, allow_pickle=False)
+                        np.save(path / f"{direction}_edge_indices.npy", csr.edge_indices, allow_pickle=False)
+                        del csr
+                    (path / "metadata.json").write_text(json.dumps(dict(
+                        backend="gestaltdb.sampling.adjacency", digest=fingerprint,
+                        nodes=num_nodes, edges=len(edges), complete=True)))
+                adjacencies = {}
+                for direction in ("out", "in"):
+                    adjacencies[direction] = CSRAdjacency(
+                        np.load(path / f"{direction}_indptr.npy", mmap_mode="r"),
+                        np.load(path / f"{direction}_edge_indices.npy", mmap_mode="r"))
+                self.snapshot = SimpleNamespace(out=adjacencies["out"], in_=adjacencies["in"])
+                return
+            from gestaltdb.sampling import SamplerSnapshot
             if not (path / "metadata.json").exists():
                 SamplerSnapshot.from_edge_arrays(
                     path, external_node_ids=np.arange(num_nodes).astype(str),

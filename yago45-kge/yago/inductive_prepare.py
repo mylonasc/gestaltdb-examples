@@ -50,12 +50,16 @@ def main():
         shards = sorted(paths.parquet_dir.glob("shard_*.parquet"))
         if not shards:
             parser.error("no parsed shards; parse the archive first")
-        triples = pl.scan_parquet(shards).select("source", "edge_type", "target").unique().collect(engine="streaming")
+        triples = pl.scan_parquet(shards).select("source", "edge_type", "target")
         nodes_frame = pl.concat([triples.select(pl.col("source").alias("node_id")),
-                                 triples.select(pl.col("target").alias("node_id"))]).unique().sort("node_id").with_row_index("node_int")
-        relations_frame = triples.select("edge_type").unique().sort("edge_type").with_row_index("rel_int")
-        mapped = triples.join(nodes_frame.rename({"node_id": "source", "node_int": "s"}), on="source").join(
-            nodes_frame.rename({"node_id": "target", "node_int": "o"}), on="target").join(relations_frame, on="edge_type")
+                                 triples.select(pl.col("target").alias("node_id"))]).unique().sort("node_id").collect(
+                                     engine="streaming").with_row_index("node_int")
+        print(f"entity map: {len(nodes_frame):,}", flush=True)
+        relations_frame = triples.select("edge_type").unique().sort("edge_type").collect(
+            engine="streaming").with_row_index("rel_int")
+        mapped = triples.join(nodes_frame.rename({"node_id": "source", "node_int": "s"}).lazy(), on="source").join(
+            nodes_frame.rename({"node_id": "target", "node_int": "o"}).lazy(), on="target").join(
+            relations_frame.lazy(), on="edge_type").select("s", "rel_int", "o")
         temporal = {}
         if args.temporal_dates:
             if args.temporal_train_through >= args.temporal_valid_through:
@@ -63,19 +67,25 @@ def main():
             dated = pl.read_parquet(args.temporal_dates).join(
                 nodes_frame.rename({"node_id": "source", "node_int": "s"}), on="source").join(
                 nodes_frame.rename({"node_id": "target", "node_int": "o"}), on="target").join(
-                relations_frame, on="edge_type").join(mapped.select("s", "rel_int", "o"),
-                                                      on=["s", "rel_int", "o"], how="semi")
-            future = dated.filter(pl.col("start_year") > args.temporal_train_through)
+                relations_frame, on="edge_type").select("s", "rel_int", "o", "start_year")
+            future = mapped.join(dated.lazy().filter(pl.col("start_year") > args.temporal_train_through),
+                                 on=["s", "rel_int", "o"], how="inner").unique().collect(engine="streaming")
             excluded = future.select("s", "rel_int", "o")
             excluded = pl.concat([excluded, excluded.select(pl.col("o").alias("s"), "rel_int", pl.col("s").alias("o"))]).unique()
-            mapped = mapped.join(excluded, on=["s", "rel_int", "o"], how="anti")
+            mapped = mapped.join(excluded.lazy(), on=["s", "rel_int", "o"], how="anti")
             for name, part in (("temporal_valid", future.filter(pl.col("start_year") <= args.temporal_valid_through)),
                                ("temporal_test", future.filter(pl.col("start_year") > args.temporal_valid_through))):
                 temporal[name] = (part.select("s", "rel_int", "o").to_numpy().astype(np.int64),
                                   part["start_year"].to_numpy())
             print(f"dated future queries excluded from all training/support context: {len(future):,}", flush=True)
             del dated, future, excluded
-        edges = mapped.select("s", "rel_int", "o").to_numpy().astype(np.int64)
+        # Stream integerization to disk. Keeping all full-graph strings AND
+        # all joined copies resident can exceed workstation RAM.
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        numeric_path = args.output.with_suffix(".edges.parquet")
+        mapped.sink_parquet(numeric_path, engine="streaming")
+        print(f"integer facts written to {numeric_path}", flush=True)
+        edges = pl.read_parquet(numeric_path).to_numpy().astype(np.int64)
         del mapped, triples
         print(f"uncapped source: {len(edges):,} facts, {len(nodes_frame):,} entities, {len(relations_frame):,} relations", flush=True)
         result = split_entities(edges, len(nodes_frame), args.unseen_fraction, args.valid_size, args.test_size, args.seed)

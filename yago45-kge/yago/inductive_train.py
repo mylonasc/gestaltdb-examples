@@ -33,17 +33,18 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--shallow-weight", type=float, default=1.0)
     parser.add_argument("--checkpoint-every", type=int, default=1000)
+    parser.add_argument("--keep-checkpoints", type=int, default=2)
     parser.add_argument("--eval-every", type=int, default=1000)
     parser.add_argument("--eval-triples", type=int, default=200)
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument("--encoder", choices=["relational", "tf-gnns"], default="tf-gnns")
-    parser.add_argument("--sampler", choices=["numpy", "gestaltdb"], default="gestaltdb")
+    parser.add_argument("--sampler", choices=["numpy", "gestaltdb", "gestaltdb-csr"], default="gestaltdb")
     parser.add_argument("--require-gpu", action="store_true")
     parser.add_argument("--negative-policy", choices=["uniform", "mixed", "relation-range"], default="uniform")
-    parser.add_argument("--validation-policy", choices=["uniform", "relation-range"], default="uniform")
+    parser.add_argument("--validation-policy", choices=["uniform", "relation-range", "both"], default="uniform")
     parser.add_argument("--feature-mode", choices=["sampled", "full"], default="full")
     parser.add_argument("--embedding-device", choices=["cpu", "gpu"], default="gpu")
-    parser.add_argument("--shallow-optimizer", choices=["adam", "sgd"], default="adam")
+    parser.add_argument("--shallow-optimizer", choices=["adam", "sgd", "sparse-adagrad"], default="adam")
     parser.add_argument("--shallow-learning-rate", type=float, default=None)
     parser.add_argument("--validation-split", choices=["valid", "temporal_valid"], default="valid")
     parser.add_argument("--no-export", action="store_true")
@@ -55,7 +56,7 @@ def main():
         tf.config.experimental.set_memory_growth(gpu, True)
     print(f"TensorFlow devices: {gpus}", flush=True)
     if (min(args.steps, args.batch_size, args.negatives, args.checkpoint_every, args.eval_every,
-            args.eval_triples, args.dim, args.hidden_dim, *args.fanouts) <= 0
+            args.eval_triples, args.keep_checkpoints, args.dim, args.hidden_dim, *args.fanouts) <= 0
             or args.temperature <= 0 or args.learning_rate <= 0 or args.shallow_weight <= 0):
         parser.error("steps, dimensions, fanouts, intervals, weights and temperatures must be positive")
     data = np.load(args.dataset, allow_pickle=False)
@@ -69,7 +70,7 @@ def main():
         parser.error("--base-dim must be a positive even integer")
     if args.shallow_learning_rate is not None and args.shallow_learning_rate <= 0:
         parser.error("--shallow-learning-rate must be positive")
-    table_factor = 1 if args.shallow_optimizer == "sgd" else 3
+    table_factor = {"sgd": 1, "adam": 3, "sparse-adagrad": 2}[args.shallow_optimizer]
     print(f"shallow table + optimizer slots: approximately {num_train_nodes * base_dim * 4 * table_factor / 2**30:.2f} GiB", flush=True)
     # Hash the exact dataset, not just its shape, to prevent silent split drift.
     digest = hashlib.sha256()
@@ -129,8 +130,12 @@ def main():
     if separate_shallow:
         optimizer.build(gnn_variables)
         rate = args.shallow_learning_rate if args.shallow_learning_rate is not None else args.learning_rate
-        shallow_optimizer = (tf.keras.optimizers.SGD(rate) if args.shallow_optimizer == "sgd"
-                             else tf.keras.optimizers.Adam(rate))
+        if args.shallow_optimizer == "sparse-adagrad":
+            from .sparse_optimizer import SparseAdagrad
+            shallow_optimizer = SparseAdagrad(rate)
+        else:
+            shallow_optimizer = (tf.keras.optimizers.SGD(rate) if args.shallow_optimizer == "sgd"
+                                 else tf.keras.optimizers.Adam(rate))
         shallow_optimizer.build(shallow_variables)
     else:
         optimizer.build(model.trainable_variables)
@@ -139,7 +144,7 @@ def main():
     checkpoint = tf.train.Checkpoint(model=model, optimizer=optimizer, step=step, rng_state=rng_state)
     if shallow_optimizer is not None:
         checkpoint.shallow_optimizer = shallow_optimizer
-    manager = tf.train.CheckpointManager(checkpoint, str(args.run_dir / "checkpoints"), max_to_keep=2)
+    manager = tf.train.CheckpointManager(checkpoint, str(args.run_dir / "checkpoints"), max_to_keep=args.keep_checkpoints)
     best_manager = tf.train.CheckpointManager(tf.train.Checkpoint(model=model), str(args.run_dir / "best"), max_to_keep=1)
     best_path = args.run_dir / "best.json"
     best_mrr = json.loads(best_path.read_text())["mrr"] if args.resume and best_path.exists() else -1.0
@@ -165,8 +170,8 @@ def main():
     curves_path.write_text("".join(json.dumps(row) + "\n" for row in curves))
 
     context = NeighborhoodGraph(train, num_nodes, num_relations,
-                                snapshot_path=args.run_dir / "snapshots" / "train" if args.sampler == "gestaltdb" else None,
-                                feature_mode=args.feature_mode)
+                                snapshot_path=args.run_dir / "snapshots" / "train" if args.sampler.startswith("gestaltdb") else None,
+                                feature_mode=args.feature_mode, compact=args.sampler == "gestaltdb-csr")
     # Training negatives are filtered against TRAIN ONLY; no test/support access.
     training_known = GraphKnownObjects(context)
     validation_known = GraphKnownObjects(context, data["valid"], data[args.validation_split])
@@ -206,9 +211,17 @@ def main():
 
     def validate(current, losses=None):
         nonlocal best_mrr
-        metrics = evaluate(model, context, data[args.validation_split], validation_known,
-                           np.arange(num_train_nodes), fanouts=args.fanouts,
-                           max_queries=args.eval_triples, candidate_policy=args.validation_policy)
+        policies = ("uniform", "relation-range") if args.validation_policy == "both" else (args.validation_policy,)
+        by_policy = {policy: evaluate(model, context, data[args.validation_split], validation_known,
+                                     np.arange(num_train_nodes), fanouts=args.fanouts,
+                                     max_queries=args.eval_triples, candidate_policy=policy) for policy in policies}
+        if args.validation_policy == "both":
+            metrics = dict(protocol="balanced uniform/range sampled-filtered tail prediction",
+                           candidate_policy="both", per_policy=by_policy,
+                           **{key: float(np.mean([result[key] for result in by_policy.values()]))
+                              for key in ("mrr", "hits1", "hits10")})
+        else:
+            metrics = by_policy[policies[0]]
         metrics.update(step=current, loss=float(losses[0]) if losses is not None else None,
                        validation_split=args.validation_split,
                        gnn_loss=float(losses[1]) if losses is not None else None,

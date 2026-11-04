@@ -186,6 +186,15 @@ avoiding per-edge Python sets at full scale. Huge external entity names live in
 without changing the GNN output width. The default shallow optimizer remains
 Adam; sparse SGD avoids its two full-size moment tables.
 
+For very large CPU tables, `--shallow-optimizer sparse-adagrad` uses native
+row-sparse resource updates with one accumulator table, coalescing repeated
+gathers without allocating full-size per-step gradients. `--sampler gestaltdb-csr`
+uses GestaltDB's directional CSR primitives in a compact application cache,
+instead of persisting the many external-ID/membership/relation-policy indexes
+of a complete `SamplerSnapshot`. This is explicitly a thin CSR adapter, not the
+complete GestaltDB snapshot format. `--keep-checkpoints 1` bounds full-state
+checkpoint retention when disk is constrained.
+
 ## Tuning and reports
 
 ```bash
@@ -202,6 +211,13 @@ relation-frequency controls, a no-message ablation, both training losses,
 learning curves and reproducible contextual/shallow t-SNE plots. t-SNE coloring
 describes observed neighborhoods; it is not evidence of held-out semantic
 retrieval quality. All ranking metrics are sampled-filtered, not full ranking.
+
+Range-only negatives can lose calibration against global uniform candidates.
+Use `--negative-policy mixed --validation-policy both` to train on both and
+select checkpoints by the mean of the two validation MRRs. Both component
+metrics remain in the curves; do not report the aggregate as a single-policy
+ranking metric. Original range-only results and their calibration failure are
+retained under `experiments/inductive_tiny_10k/`.
 
 ## Tests
 

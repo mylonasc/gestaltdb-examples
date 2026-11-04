@@ -50,10 +50,11 @@ def test_candidate_filter_keeps_target_and_removes_other_known_facts():
     assert len(np.unique(candidates)) == len(candidates)
 
 
-def test_gestaltdb_csr_uses_edge_ids_not_positions(tmp_path):
+@pytest.mark.parametrize("compact", [False, True])
+def test_gestaltdb_csr_uses_edge_ids_not_positions(tmp_path, compact):
     pytest.importorskip("gestaltdb")
     edges = np.asarray([[5, 0, 4], [1, 0, 3], [0, 1, 2], [3, 1, 4]])
-    graph = NeighborhoodGraph(edges, 6, 2, snapshot_path=tmp_path / "snapshot")
+    graph = NeighborhoodGraph(edges, 6, 2, snapshot_path=tmp_path / "snapshot", compact=compact)
     ids, batch = graph.sample([0], [10], np.random.default_rng(1))
     assert ids.tolist() == [0, 2]
     assert batch["senders"].max() < len(ids)

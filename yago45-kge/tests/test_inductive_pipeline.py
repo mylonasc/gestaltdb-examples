@@ -28,7 +28,7 @@ def test_encoder_is_independent_of_entity_table_and_handles_unseen_nodes(tmp_pat
     np.testing.assert_allclose(before, restored.encode(tensors).numpy(), atol=1e-7)
 
 
-@pytest.mark.parametrize("shallow_recipe", ["adam", "cpu-sgd"])
+@pytest.mark.parametrize("shallow_recipe", ["adam", "cpu-sgd", "cpu-adagrad"])
 def test_training_resume_and_inductive_cli(tmp_path, shallow_recipe):
     edges = np.asarray([(s, (s + o) % 2, o) for s in range(16) for o in range(16) if s != o])
     data = split_entities(edges, 16, 0.25, 8, 8, 13)
@@ -41,9 +41,11 @@ def test_training_resume_and_inductive_cli(tmp_path, shallow_recipe):
               "--run-dir", str(run), "--batch-size", "2", "--negatives", "2",
               "--dim", "8", "--hidden-dim", "12", "--fanouts", "2", "2",
               "--checkpoint-every", "1", "--eval-every", "1", "--eval-triples", "2"]
-    if shallow_recipe == "cpu-sgd":
-        common += ["--embedding-device", "cpu", "--shallow-optimizer", "sgd",
-                   "--shallow-learning-rate", "0.1", "--base-dim", "4"]
+    if shallow_recipe != "adam":
+        common += ["--embedding-device", "cpu", "--shallow-optimizer", "sgd" if shallow_recipe == "cpu-sgd" else "sparse-adagrad",
+                   "--shallow-learning-rate", "0.1", "--base-dim", "4", "--validation-policy", "both"]
+    if shallow_recipe == "cpu-adagrad":
+        common += ["--sampler", "gestaltdb-csr", "--keep-checkpoints", "1"]
     env = dict(os.environ, TF_NUM_INTEROP_THREADS="1", TF_NUM_INTRAOP_THREADS="1", TF_CPP_MIN_LOG_LEVEL="3")
 
     def invoke(command):
@@ -73,8 +75,22 @@ def test_training_resume_and_inductive_cli(tmp_path, shallow_recipe):
     invoke(uninterrupted + ["--steps", "2"])
     full = tf.train.load_checkpoint(tf.train.latest_checkpoint(str(full_run / "checkpoints")))
     for name, _ in tf.train.list_variables(tf.train.latest_checkpoint(str(run / "checkpoints"))):
-        if name.startswith(("model/", "optimizer/")):
+        if name.startswith(("model/", "optimizer/", "shallow_optimizer/")):
             np.testing.assert_allclose(checkpoint.get_tensor(name), full.get_tensor(name), atol=1e-6)
+
+
+def test_native_sparse_adagrad_coalesces_duplicates_and_leaves_other_rows_untouched():
+    from yago.sparse_optimizer import SparseAdagrad
+    table = tf.keras.layers.Embedding(100, 4)
+    table(tf.constant([0]))
+    table.embeddings.assign(tf.ones_like(table.embeddings))
+    optimizer = SparseAdagrad(.01)
+    optimizer.build([table.embeddings])
+    gradient = tf.IndexedSlices(tf.ones((3, 4)), tf.constant([2, 2, 5]), tf.constant([100, 4]))
+    optimizer.apply_gradients([(gradient, table.embeddings)])
+    np.testing.assert_array_equal(table.embeddings.numpy()[0], np.ones(4))
+    np.testing.assert_allclose(table.embeddings.numpy()[2], np.full(4, .99), atol=1e-6)
+    np.testing.assert_allclose(optimizer.accumulators[0].numpy()[2], np.full(4, 4), atol=1e-6)
 
 
 def test_prepare_cli_uses_only_original_training_facts(tmp_path):

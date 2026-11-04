@@ -19,6 +19,12 @@ The selected run is extended separately from the short-budget search. Full graph
 experiments retain all parsed structural entity-to-entity facts without edge caps.
 No inductive test metrics are used by the search.
 
+`inductive_tiny_10k/` contains actual checkpoint-backed results, learning curves,
+contextual/shallow t-SNE, raw sampled rankings, and the complete recipe for the
+10k range-only extension. Its hard-candidate gain is real, but global candidate
+calibration fails (also confirmed on validation). This limitation is retained
+explicitly; a separate mixed-negative run addresses both candidate policies.
+
 ## Corrected masked KGE
 
 - `masked_negative_control.csv`: equal-budget GestaltDB-engine versus hybrid

@@ -113,8 +113,8 @@ def main():
         pool = np.arange(int(data["num_train_nodes"]))
     context = NeighborhoodGraph(edges, len(data["node_ids"]), len(data["relation_ids"]),
                                 snapshot_path=args.run_dir / "snapshots" / args.split
-                                if spec.get("sampler") == "gestaltdb" else None,
-                                feature_mode=spec.get("feature_mode", "sampled"))
+                                if spec.get("sampler", "").startswith("gestaltdb") else None,
+                                feature_mode=spec.get("feature_mode", "sampled"), compact=spec.get("sampler") == "gestaltdb-csr")
     known = GraphKnownObjects(context, *(data[key] for key in ("valid", "test", "temporal_valid", "temporal_test") if key in data))
     result = evaluate(model, context, data[args.split], known, pool,
                       fanouts=spec["fanouts"], negatives=args.negatives, max_queries=args.triples,

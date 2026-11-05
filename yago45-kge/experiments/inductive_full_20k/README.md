@@ -43,3 +43,17 @@ See summary.json for confidence intervals, frequency/random controls, per-relati
 |---|---:|---:|---:|---:|
 | uniform | 0.9786 | 0.9618 | 0.9646 | 0.0886 |
 | relation-range | 0.8641 | 0.7753 | 0.7764 | 0.0920 |
+
+## Complete all-node static GNN cache
+
+49,281,921 × 200 float16 vectors (19.7 GB), stored outside Git at `data/yago45_full/gnn_cache/gnn_embeddings.npy`.
+All values finite: True. See cache_metadata.json for completion and model/dataset identity.
+Held-out queries/reverses are globally scrubbed before encoding; these batched-context results are separate from per-query inference.
+
+| Cache candidate policy | MRR | Hits@1 | Hits@10 | Mean candidates | Frequency MRR |
+|---|---:|---:|---:|---:|---:|
+| uniform | 0.9787 | 0.9700 | 0.9935 | 51.000 | 0.9679 |
+| relation-range | 0.8568 | 0.7880 | 0.9715 | 49.528 | 0.7799 |
+| degree-matched | 0.4759 | 0.3075 | 0.8315 | 30.712 | 0.3116 |
+
+Degree-matched candidates control incoming-predicate degree; sparse bins reduce candidate counts, so compare against that policy's own controls.

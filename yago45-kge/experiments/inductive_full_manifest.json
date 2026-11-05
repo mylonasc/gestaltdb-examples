@@ -1,5 +1,5 @@
 {
-  "status": "20,000-step training and held-out evaluation complete; executed results notebook published; all-node cache in progress",
+  "status": "Training, held-out evaluation, executed results notebook and all-node GNN cache complete",
   "completed_steps": 20000,
   "best_validation_step": 18000,
   "best_balanced_temporal_validation_mrr": 0.7812955785378033,

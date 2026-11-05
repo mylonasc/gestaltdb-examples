@@ -104,6 +104,29 @@ accuracy**, and 2-D spacing must not be interpreted as calibrated similarity."""
     code("""display(Image(filename=str(report / 'shallow_tsne.png')))
 display(Markdown('Final known-entity validation MRR: **' +
                  f"{results['shallow_final_known_valid']['mrr']:.6f}" + '**.'))"""),
+    md('## Complete all-node GNN cache and separate evaluation'),
+    code("""cache = json.loads((report / 'cache_metadata.json').read_text())
+cached_results = json.loads((report / 'cached_link_prediction.json').read_text())
+table(['Cache property', 'Value'], [
+    ['Shape', cache['matrix']['shape']], ['Dtype', cache['matrix']['dtype']],
+    ['Complete', cache['complete']], ['All values finite', cache['matrix']['all_finite']],
+    ['Matrix bytes', cache['matrix']['file_bytes']]])
+table(['Candidates', 'MRR', 'Hits@1', 'Hits@10', 'Mean candidates', 'Frequency MRR'], [
+    [policy, f"{r['mrr']:.6f}", f"{r['hits1']:.4f}", f"{r['hits10']:.4f}",
+     f"{r['mean_candidates']:.3f}", f"{r['frequency_mrr']:.6f}"]
+    for policy, r in cached_results.items()])"""),
+    md("""Every mapped node has a 200-dimensional float16 vector. Before caching,
+all held-out queries and same-relation reverses were globally scrubbed from
+context and degree features. Static batched contexts differ from per-query
+contexts; candidate pools/frequency controls also reflect the scrubbed graph.
+These are separate measurements, not exact checkpoint-ranking reproduction.
+
+The degree-matched diagnostic controls incoming-predicate degree with zero and
+logarithmic nonzero bins. Its lower MRR reveals the difficulty hidden by easy
+global negatives. Some bins have few candidates (30.7 mean versus 51 uniform),
+so compare against its own controls, not directly against the other policies.
+Frequency here is simply observed incoming-predicate count, with expected ties.
+"""),
     md("""## Reusable artifacts and reproduction
 
 - [Complete report and raw rankings](../experiments/inductive_full_20k/README.md)

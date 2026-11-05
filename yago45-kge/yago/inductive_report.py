@@ -405,6 +405,22 @@ def render_summary(summary, output):
         table += ["", "**Limitation:** this checkpoint underperforms the frequency control on global uniform candidates. "
                   "Strong relation-range results must not be presented as good candidate-independent completion. "
                   "Training-negative policy and checkpoint-selection policy matter."]
+    cache_metrics = output / "cached_link_prediction.json"
+    if cache_metrics.exists():
+        cached = json.loads(cache_metrics.read_text())
+        cache = json.loads((output / "cache_metadata.json").read_text())
+        matrix = cache['matrix']
+        table += ["", "## Complete all-node static GNN cache", "",
+                  f"{matrix['shape'][0]:,} × {matrix['shape'][1]} {matrix['dtype']} vectors "
+                  f"({matrix['file_bytes'] / 1e9:.1f} GB), stored outside Git at `{matrix['local_path']}`.",
+                  f"All values finite: {matrix['all_finite']}. See cache_metadata.json for completion and model/dataset identity.",
+                  "Held-out queries/reverses are globally scrubbed before encoding; these batched-context results are separate from per-query inference.", "",
+                  "| Cache candidate policy | MRR | Hits@1 | Hits@10 | Mean candidates | Frequency MRR |",
+                  "|---|---:|---:|---:|---:|---:|"]
+        for policy, result in cached.items():
+            table.append(f"| {policy} | {result['mrr']:.4f} | {result['hits1']:.4f} | "
+                         f"{result['hits10']:.4f} | {result['mean_candidates']:.3f} | {result['frequency_mrr']:.4f} |")
+        table += ["", "Degree-matched candidates control incoming-predicate degree; sparse bins reduce candidate counts, so compare against that policy's own controls."]
     (output / "README.md").write_text("\n".join(table) + "\n")
 
 

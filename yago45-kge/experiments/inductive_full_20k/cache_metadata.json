@@ -1,0 +1,40 @@
+{
+  "identity": {
+    "model_digest": "03687ac0075552beff929b56ebc0c4dedb4a7fa7e6d0d1a40538d0799f67a9e7",
+    "dataset_digest": "07e72b619dd2a71bb0d2c9f1ca9346fbc13c645625a399f435e036c9414ca1d2",
+    "nodes": 49281921,
+    "dim": 200,
+    "dtype": "float16",
+    "batch_size": 2048,
+    "fanouts": [
+      8,
+      4
+    ],
+    "sampling_version": 2,
+    "feature_mode": "full",
+    "protocol": "train + support, ALL heldout queries/reverses globally scrubbed"
+  },
+  "completed_nodes": 49281921,
+  "complete": true,
+  "rng_state": {
+    "bit_generator": "PCG64",
+    "state": {
+      "state": 81346186821674399757095219205273103118,
+      "inc": 317612346296202158696945144441957901887
+    },
+    "has_uint32": 1,
+    "uinteger": 109315225
+  },
+  "node_mapping_path": "/home/charilaos/Workspace/gestaltdb-examples/data/yago45_full/inductive.nodes.parquet",
+  "matrix": {
+    "shape": [
+      49281921,
+      200
+    ],
+    "dtype": "float16",
+    "all_finite": true,
+    "file_bytes": 19712768528,
+    "local_path": "data/yago45_full/gnn_cache/gnn_embeddings.npy"
+  },
+  "evaluation_note": "Separate static batched-context float16 evaluation on globally scrubbed context; not identical to per-query rankings."
+}

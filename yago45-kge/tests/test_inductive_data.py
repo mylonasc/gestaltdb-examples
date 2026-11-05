@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from yago.inductive_data import GraphKnownObjects, NeighborhoodGraph, known_objects, sampled_candidates, split_entities
+from yago.inductive_data import GraphKnownObjects, NeighborhoodGraph, known_objects, sampled_candidates, split_entities, zero_relation_degree_candidates
 
 
 def example_split():
@@ -113,3 +113,11 @@ def test_static_cache_scrubs_queries_and_reverse_edges():
     edges = np.asarray([[0, 0, 1], [1, 0, 0], [1, 1, 2]])
     got = scrub_queries(edges, [np.asarray([[0, 0, 1]])], 3, 2)
     np.testing.assert_array_equal(got, [[1, 1, 2]])
+
+
+def test_zero_degree_controls_do_not_inject_the_only_zero_degree_object():
+    query = np.asarray([7, 0, 5])
+    candidates = zero_relation_degree_candidates(query, np.arange(8), np.asarray([1, 2, 3]),
+        3, {(7, 0): {0, 5}}, np.random.default_rng(13))
+    assert candidates[0] == 5
+    assert set(candidates[1:]) == {4, 6, 7}

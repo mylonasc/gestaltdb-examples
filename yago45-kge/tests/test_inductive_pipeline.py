@@ -84,6 +84,15 @@ def test_training_resume_and_inductive_cli(tmp_path, shallow_recipe):
         assert np.all(np.isfinite(vectors))
         assert (cache / "cached_link_prediction.json").exists()
         invoke(command + ["--resume"])
+        report = tmp_path / "report"
+        command = [sys.executable, "-m", "yago.inductive_report", "--run-dir", str(run),
+                   "--output", str(report), "--triples", "2", "--tsne-nodes", "16", "--publish-gnn"]
+        invoke(command)
+        ranking = report / "test_uniform_details.json"
+        original_mtime = ranking.stat().st_mtime_ns
+        invoke(command + ["--resume-report"])
+        assert ranking.stat().st_mtime_ns == original_mtime
+        assert (report / "summary.json").exists()
     # Resume must be equivalent to uninterrupted training (same NumPy sampler
     # RNG, optimizer slots and weights; encoder contains no stochastic layers).
     full_run = tmp_path / "full_run"

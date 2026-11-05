@@ -250,6 +250,14 @@ are not guaranteed by any of these relation-conditioned objectives.
 
 ## Tuning and reports
 
+The [executed full-graph notebook](../notebooks/02_inductive_full_results.ipynb)
+embeds actual t-SNE and loss figures and can be rerun using committed evidence
+alone. `inductive_report --resume-report` preserves completed ranking stages;
+`--refresh-summary` refreshes Markdown and curves without loading the graph or
+model. Degree-matched evaluation (`--candidate-policy degree-matched`) controls
+incoming-predicate degree using zero and logarithmic nonzero bins; it is a
+diagnostic, not a replacement for the prespecified uniform/range results.
+
 ```bash
 bash scripts/inductive.sh tune --dataset ../data/yago45/inductive.npz \
   --study-dir ../data/yago45/inductive_optuna --trials 4

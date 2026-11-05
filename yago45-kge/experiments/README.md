@@ -6,6 +6,12 @@ are intentionally excluded from Git.
 
 ## Inductive graph autoencoder
 
+**Full-graph results:** [executed notebook with embedded t-SNE and loss curves](../notebooks/02_inductive_full_results.ipynb)
+and [complete 20k report](inductive_full_20k/README.md). Inductive sampled-filtered
+MRR is 0.9786 (uniform) / 0.8641 (relation-range); paired message gain is 0.0697.
+Temporal MRR is 0.7984 / 0.4591; the uniform result is below frequency (0.8377).
+The standalone ID-table-free GNN export is included with the report.
+
 - `inductive_optuna_1500.csv`: four equal-budget, validation-only trials on the
   tiny graph's entity-held-out dataset. Objective: contextual GNN relation-range
   sampled-filtered tail MRR, 300 validation queries and up to 50 negatives.

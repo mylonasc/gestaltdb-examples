@@ -18,6 +18,8 @@ shallow KGE embeddings, and supports full checkpoint resume and contextual GNN
 evaluation on entity-held-out support/query splits. Existing runs remain unchanged.
 
 Actual calibrated 10k results, loss curves and t-SNE are in
+the [executed full-graph results notebook](notebooks/02_inductive_full_results.ipynb)
+and [full 20k report](experiments/inductive_full_20k/README.md). Earlier tiny results are in
 [`experiments/inductive_tiny_mixed_10k/`](experiments/inductive_tiny_mixed_10k/).
 The [full-graph manifest](experiments/inductive_full_manifest.json) records the
 uncapped 119M-fact source and temporal/inductive splits; full-run metrics are

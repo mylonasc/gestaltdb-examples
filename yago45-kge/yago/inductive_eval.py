@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
-from .inductive_data import GraphKnownObjects, NeighborhoodGraph, mapping_digest, sampled_candidates
+from .inductive_data import GraphKnownObjects, NeighborhoodGraph, mapping_digest, sampled_candidates, zero_relation_degree_candidates
 from .inductive_model import InductiveAutoencoder
 
 
@@ -20,15 +20,28 @@ def evaluate(model, context, queries, all_known, candidate_pool, *, fanouts,
     selected = rng.choice(len(queries), min(max_queries, len(queries)), replace=False)
     ranks, counts, details = [], [], []
     ranges = {}
+    range_counts = {}
+    matched_pools = {}
     frequencies = {}
     for relation in np.unique(queries[selected, 1]):
         objects, frequency = np.unique(context.edges[context.edges[:, 1] == relation, 2], return_counts=True)
         ranges[int(relation)] = objects
+        range_counts[int(relation)] = frequency
         frequencies[int(relation)] = dict(zip(objects.tolist(), frequency.tolist()))
     for query in queries[selected]:
         s, r, _ = map(int, query)
         pool = ranges[r] if candidate_policy == "relation-range" else candidate_pool
-        candidates = sampled_candidates(query, pool, negatives, all_known, rng)
+        degree = frequencies[r].get(int(query[2]), 0)
+        if candidate_policy == "degree-matched" and degree == 0:
+            candidates = zero_relation_degree_candidates(query, candidate_pool, ranges[r], negatives, all_known, rng)
+        else:
+            if candidate_policy == "degree-matched":
+                lower = 2 ** (int(degree).bit_length() - 1)
+                key = (r, lower)
+                if key not in matched_pools:
+                    matched_pools[key] = ranges[r][(range_counts[r] >= lower) & (range_counts[r] < 2 * lower)]
+                pool = matched_pools[key]
+            candidates = sampled_candidates(query, pool, negatives, all_known, rng)
         if cached_vectors is not None:
             subjects = np.repeat(np.asarray(cached_vectors[s:s + 1], dtype=np.float32), len(candidates), axis=0)
             objects = np.asarray(cached_vectors[candidates], dtype=np.float32)
@@ -55,7 +68,22 @@ def evaluate(model, context, queries, all_known, candidate_pool, *, fanouts,
                             random_rr=float(np.mean(1 / np.arange(1, len(candidates) + 1)))))
     if not ranks:
         raise ValueError("no queries available for evaluation")
-    ranks = np.asarray(ranks)
+    result = metrics_from_details(details, candidate_policy, seed)
+    if include_details:
+        result["details"] = details
+    if cached_vectors is not None:
+        result["protocol"] = "cached GNN embeddings + contextual decoder, sampled-filtered tails"
+    if candidate_policy == "degree-matched":
+        result["matching"] = "observed incoming-predicate-degree bins: zero, 1, 2-3, 4-7, ..."
+    return result
+
+
+def metrics_from_details(details, candidate_policy="uniform", seed=12345):
+    """Reconstruct exact metrics from persisted rankings after an interruption."""
+    if not details:
+        raise ValueError("no persisted rankings")
+    ranks = np.asarray([row["rank"] for row in details])
+    counts = np.asarray([row["candidates"] for row in details])
     rr = 1 / ranks
     bootstrap_rng = np.random.default_rng(seed + 1)
     bootstrap = np.mean(bootstrap_rng.choice(rr, size=(1000, len(rr)), replace=True), axis=1)
@@ -76,10 +104,6 @@ def evaluate(model, context, queries, all_known, candidate_pool, *, fanouts,
     nontrivial = np.asarray(counts) > 1
     result["single_candidate_queries"] = int(np.sum(~nontrivial))
     result["mrr_nontrivial_queries"] = float(np.mean(rr[nontrivial])) if np.any(nontrivial) else None
-    if include_details:
-        result["details"] = details
-    if cached_vectors is not None:
-        result["protocol"] = "cached GNN embeddings + contextual decoder, sampled-filtered tails"
     return result
 
 
@@ -91,7 +115,7 @@ def main():
     parser.add_argument("--triples", type=int, default=200)
     parser.add_argument("--negatives", type=int, default=50)
     parser.add_argument("--checkpoint", choices=["best", "latest"], default="best")
-    parser.add_argument("--candidate-policy", choices=["uniform", "relation-range"], default="uniform")
+    parser.add_argument("--candidate-policy", choices=["uniform", "relation-range", "degree-matched"], default="uniform")
     parser.add_argument("--saved-model", action="store_true", help="Use the lightweight exported GNN, without loading ID tables")
     args = parser.parse_args()
     for gpu in tf.config.list_physical_devices("GPU"):

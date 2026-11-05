@@ -276,6 +276,26 @@ def sampled_candidates(query, pool, negatives, known, rng):
                             if x != o and int(x) not in known.get((s, r), set())], dtype=np.int64)
 
 
+def zero_relation_degree_candidates(query, pool, observed_objects, negatives, known, rng):
+    """Match a zero-incoming-degree target without materializing a huge complement."""
+    s, r, o = map(int, query)
+    candidates, seen = [o], {o}
+    forbidden = known.get((s, r), set())
+    for _ in range(64):
+        draws = rng.choice(pool, min(len(pool), max(32, 2 * negatives)), replace=False)
+        positions = np.searchsorted(observed_objects, draws)
+        present = positions < len(observed_objects)
+        present[present] = observed_objects[positions[present]] == draws[present]
+        for candidate in draws[~present]:
+            candidate = int(candidate)
+            if candidate not in seen and candidate not in forbidden:
+                candidates.append(candidate)
+                seen.add(candidate)
+                if len(candidates) >= negatives + 1:
+                    return np.asarray(candidates, dtype=np.int64)
+    return np.asarray(candidates, dtype=np.int64)
+
+
 def known_objects(*parts):
     known = {}
     for rows in parts:

@@ -136,7 +136,7 @@ def main():
         results = {policy: evaluate(model, context, data["test"], known, pool,
                                    fanouts=spec["fanouts"], negatives=50, max_queries=args.eval_triples,
                                    candidate_policy=policy, cached_vectors=vectors)
-                   for policy in ("uniform", "relation-range")}
+                   for policy in ("uniform", "relation-range", "degree-matched")}
         (args.output / "cached_link_prediction.json").write_text(json.dumps(results, indent=2))
         print(json.dumps({policy: result["mrr"] for policy, result in results.items()}), flush=True)
 

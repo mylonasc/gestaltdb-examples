@@ -250,6 +250,59 @@ are not guaranteed by any of these relation-conditioned objectives.
 
 ## Tuning and reports
 
+### Entity-complete strict-inductive training
+
+`--entity-passes 2` replaces random positive-fact draws with a deterministic,
+resumable entity-coverage schedule. Each of the **43,463,828 training entities**
+anchors one incident **training fact** per pass, including tail-only entities.
+Facts keep their original direction; held-out/support facts are never used for
+supervision or training context. A seeded affine bijection visits each training
+ID exactly once per pass without storing a full permutation. This traversal is
+bijective, not a uniformly random permutation.
+
+For batch size 128, two passes require **679,124 updates**, with short final
+batches (no padding/repeated anchors). This guarantees **86,927,656 supervised
+anchor appearances**. An entity may occur more often as another anchor's
+neighbor/positive endpoint/negative. It is an entity-balanced objective, not two
+exhaustive edge epochs, and does not guarantee convergence or a nonzero gradient
+on every appearance. The trainer fails upfront on isolated training IDs or a
+training context containing held-out IDs.
+
+```bash
+bash scripts/inductive.sh train \
+  --dataset ../data/yago45_full/inductive.npz \
+  --run-dir ../data/yago45_full/inductive_full_entity2_h128_mp3 \
+  --entity-passes 2 --batch-size 128 --negatives 8 \
+  --hidden-dim 128 --dim 200 --base-dim 32 --fanouts 8 4 2 --residual \
+  --learning-rate 0.001 --temperature 0.1 \
+  --negative-policy mixed --validation-policy both --validation-split temporal_valid \
+  --feature-mode full --sampler gestaltdb-csr --embedding-device cpu \
+  --shallow-optimizer sparse-adagrad --shallow-learning-rate 0.05 \
+  --keep-checkpoints 1 --checkpoint-every 5000 --eval-every 5000 \
+  --eval-triples 300 --export-checkpoint latest --require-gpu
+```
+
+This is a **new model trained from scratch**, not a continuation of the smaller
+20k run: hidden width doubles from 64 to 128, with three message-passing steps
+instead of two. `tf_gnns` adds residual node **and edge** updates at every process
+step (explicitly enabled), in addition to the outer node skip. Output vectors
+remain 200-dimensional. Width doubling is not a claim of exactly twice the
+parameter count. The shallow tables remain CPU-resident and 32-dimensional.
+
+`coverage.json` is atomically persisted after complete optimizer checkpoints;
+it records complete passes, partial-pass anchors, and the guaranteed minimum
+supervised appearances. Resume with the **identical command plus `--resume`**;
+the schedule derives its position from the completed step and reuses the saved
+fact/neighborhood RNG state. SIGINT/SIGTERM stop at an update boundary.
+
+For coverage runs, the default export is **latest**, so the final deployment
+model includes both complete passes. Validation-best weights are retained
+separately for diagnostics and might predate completion; do not describe those
+as two-pass weights. Use `inductive_eval --checkpoint latest` (also with
+`--saved-model`) for the completed coverage artifact. Existing 20k results,
+weights, caches and Hugging Face preparation cards are historical and unchanged.
+New large caches require additional disk headroom; the old cache is not deleted.
+
 The [executed full-graph notebook](../notebooks/02_inductive_full_results.ipynb)
 embeds actual t-SNE and loss figures and can be rerun using committed evidence
 alone. `inductive_report --resume-report` preserves completed ranking stages;

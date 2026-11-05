@@ -29,7 +29,7 @@ class InductiveAutoencoder(tf.keras.Model):
     """
 
     def __init__(self, num_train_nodes, num_relations, dim=200, hidden_dim=256, layers=2,
-                 encoder="relational", base_dim=None, embedding_device="gpu"):
+                 encoder="relational", base_dim=None, embedding_device="gpu", residual=None):
         super().__init__()
         base_dim = dim if base_dim is None else base_dim
         if dim % 2 or base_dim % 2 or layers < 1:
@@ -37,12 +37,13 @@ class InductiveAutoencoder(tf.keras.Model):
         self.input_projection = tf.keras.layers.Dense(hidden_dim, activation="relu")
         self.message_relations = tf.keras.layers.Embedding(2 * num_relations, hidden_dim)
         self.encoder_kind = encoder
+        self.residual = encoder == "tf-gnns" if residual is None else bool(residual)
         if encoder == "tf-gnns":
             from tf_gnns import GraphNetMPNN_MLP
             self.gnn = GraphNetMPNN_MLP(
                 units=hidden_dim, core_units=hidden_dim, core_size=hidden_dim,
                 gi_units=hidden_dim, core_steps=layers, node_output_size=hidden_dim,
-                edge_output_size=hidden_dim, aggregation_function="mean")
+                edge_output_size=hidden_dim, aggregation_function="mean", residual=self.residual)
         elif encoder != "relational":
             raise ValueError(f"unknown encoder: {encoder}")
         self.message_layers = ([tf.keras.layers.Dense(hidden_dim, activation="relu") for _ in range(layers)]
@@ -91,7 +92,8 @@ class InductiveAutoencoder(tf.keras.Model):
         for message_layer, self_layer in zip(self.message_layers, self.self_layers):
             messages = message_layer(tf.concat([tf.gather(h, graph["senders"]), rel], axis=-1))
             aggregate = tf.math.unsorted_segment_mean(messages, graph["receivers"], tf.shape(h)[0])
-            h = tf.nn.relu(self_layer(h) + aggregate)
+            update = self_layer(h) + aggregate
+            h = tf.nn.relu(h + update if self.residual else update)
         # Norm control makes scores comparable across different sampled contexts.
         return tf.math.l2_normalize(self.output_projection(h), axis=-1)
 

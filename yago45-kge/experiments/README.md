@@ -6,6 +6,16 @@ are intentionally excluded from Git.
 
 ## Inductive graph autoencoder
 
+**New strict entity-complete run (in progress):**
+[`inductive_entity2_plan.json`](inductive_entity2_plan.json) records the
+two-pass coverage target: every one of 43,463,828 training entities is a
+supervised endpoint at least twice, with held-out entities excluded. The new
+GNN uses hidden width 128, three residual message steps and 200-dimensional
+outputs. This requires 679,124 updates, not 20k; no completed results for this
+larger run are claimed here. Recipe: `bash scripts/train_inductive_entity2.sh`.
+Previous results below remain valid historical **20k-budget** results, not
+evidence of full training-entity coverage.
+
 **Full-graph results:** [executed notebook with embedded t-SNE and loss curves](../notebooks/02_inductive_full_results.ipynb)
 and [complete 20k report](inductive_full_20k/README.md). Inductive sampled-filtered
 MRR is 0.9786 (uniform) / 0.8641 (relation-range); paired message gain is 0.0697.

@@ -114,7 +114,8 @@ def main():
     parser.add_argument("--split", choices=["valid", "test", "temporal_valid", "temporal_test"], default="test")
     parser.add_argument("--triples", type=int, default=200)
     parser.add_argument("--negatives", type=int, default=50)
-    parser.add_argument("--checkpoint", choices=["best", "latest"], default="best")
+    parser.add_argument("--checkpoint", choices=["best", "latest"], default=None,
+                        help="Defaults to the run's export policy (latest for entity coverage, otherwise best)")
     parser.add_argument("--candidate-policy", choices=["uniform", "relation-range", "degree-matched"], default="uniform")
     parser.add_argument("--saved-model", action="store_true", help="Use the lightweight exported GNN, without loading ID tables")
     args = parser.parse_args()
@@ -123,12 +124,15 @@ def main():
     if args.triples <= 0 or args.negatives <= 0:
         parser.error("--triples and --negatives must be positive")
     spec = json.loads((args.run_dir / "run.json").read_text())
+    args.checkpoint = args.checkpoint or spec.get("export_checkpoint", "best")
     dataset = args.dataset or Path(spec["dataset"])
     data = np.load(dataset, allow_pickle=False)
     if args.saved_model:
-        if args.checkpoint != "best":
-            parser.error("the standalone SavedModel is validation-selected; use --checkpoint best")
         latest = str(args.run_dir / "gnn_saved_model")
+        metadata = json.loads((Path(latest) / "metadata.json").read_text())
+        policy = metadata.get("checkpoint_policy", "best")
+        if args.checkpoint != policy:
+            parser.error(f"standalone SavedModel was exported from {policy}; use --checkpoint {policy}")
         model = tf.saved_model.load(latest)
     else:
         model = InductiveAutoencoder(**spec["model"])

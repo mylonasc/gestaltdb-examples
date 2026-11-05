@@ -169,6 +169,72 @@ def test_cpu_table_gather_operations_are_explicitly_cpu_placed():
     assert all(operation.type == "ResourceGather" for operation in gathers)
 
 
+def test_three_step_residual_entity_coverage_run_and_signal_resume(tmp_path):
+    edges = np.asarray([(s, (s + o) % 2, o) for s in range(16) for o in range(16) if s != o])
+    data = split_entities(edges, 16, .25, 8, 8, 13)
+    order = data.pop("node_order")
+    dataset = tmp_path / "dataset.npz"
+    np.savez_compressed(dataset, **data, node_ids=np.asarray([f"n{i}" for i in order]),
+                        relation_ids=np.asarray(["r0", "r1"]))
+    run = tmp_path / "coverage_run"
+    command = [sys.executable, "-m", "yago.inductive_train", "--dataset", str(dataset),
+               "--run-dir", str(run), "--entity-passes", "2", "--batch-size", "3",
+               "--dim", "8", "--hidden-dim", "16", "--fanouts", "2", "2", "1",
+               "--encoder", "tf-gnns", "--residual", "--base-dim", "4",
+               "--embedding-device", "cpu", "--shallow-optimizer", "sparse-adagrad",
+               "--sampler", "gestaltdb-csr", "--negatives", "2", "--checkpoint-every", "1",
+               "--keep-checkpoints", "1", "--eval-every", "100", "--eval-triples", "2"]
+    env = dict(os.environ, TF_NUM_INTEROP_THREADS="1", TF_NUM_INTRAOP_THREADS="1", TF_CPP_MIN_LOG_LEVEL="3")
+    process = subprocess.Popen(command, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    output = []
+    for line in process.stdout:
+        output.append(line)
+        if line.startswith("step=1 loss="):
+            process.send_signal(signal.SIGTERM)
+            break
+    tail, _ = process.communicate(timeout=120)
+    assert process.returncode == 0, "".join(output) + tail
+    assert "stopped after checkpointing complete step" in tail
+    result = subprocess.run(command + ["--resume"], env=env, text=True, capture_output=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    progress = json.loads((run / "coverage.json").read_text())
+    assert progress["complete"]
+    assert progress["guaranteed_minimum_supervised_appearances_per_entity"] == 2
+    assert progress["supervised_anchor_draws"] == 2 * int(data["num_train_nodes"])
+    metadata = json.loads((run / "gnn_saved_model" / "metadata.json").read_text())
+    assert metadata["checkpoint_policy"] == "latest"
+    assert metadata["coverage"]["complete"]
+    result = subprocess.run([sys.executable, "-m", "yago.inductive_eval", "--run-dir", str(run),
+                             "--saved-model", "--triples", "2", "--negatives", "2"],
+                            env=env, text=True, capture_output=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = tmp_path / "coverage_report"
+    result = subprocess.run([sys.executable, "-m", "yago.inductive_report", "--run-dir", str(run),
+                             "--output", str(report), "--triples", "2", "--tsne-nodes", "16", "--publish-gnn"],
+                            env=env, text=True, capture_output=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    summary = json.loads((report / "summary.json").read_text())
+    assert summary["selected_checkpoint_policy"] == "latest"
+    assert summary["coverage"]["complete"]
+    assert summary["selected_model_coverage"]["guaranteed_minimum_supervised_appearances_per_entity"] == 2
+    assert summary["positive_seed_draws"] == 2 * int(data["num_train_nodes"])
+    spec = json.loads((run / "run.json").read_text())
+    model = InductiveAutoencoder(**spec["model"])
+    assert model.gnn.core_steps == 3 and model.gnn.is_residual
+    assert len(model.gnn.g_core_determ) == 3
+    full_run = tmp_path / "uninterrupted"
+    full_command = command.copy()
+    full_command[full_command.index(str(run))] = str(full_run)
+    result = subprocess.run(full_command, env=env, text=True, capture_output=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    resumed_path = tf.train.latest_checkpoint(str(run / "checkpoints"))
+    resumed = tf.train.load_checkpoint(resumed_path)
+    uninterrupted = tf.train.load_checkpoint(tf.train.latest_checkpoint(str(full_run / "checkpoints")))
+    for name, _ in tf.train.list_variables(resumed_path):
+        if name.startswith(("model/", "optimizer/", "shallow_optimizer/")):
+            np.testing.assert_allclose(resumed.get_tensor(name), uninterrupted.get_tensor(name), atol=1e-6)
+
+
 def test_legacy_interrupted_step_counter_requires_optimizer_agreement():
     from yago.inductive_train import reconcile_completed_step
     assert reconcile_completed_step(5, 5, 5) == 5

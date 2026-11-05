@@ -185,6 +185,8 @@ def main():
     parser.add_argument("--triples", type=int, default=1000)
     parser.add_argument("--negatives", type=int, default=50)
     parser.add_argument("--tsne-nodes", type=int, default=2000)
+    parser.add_argument("--checkpoint", choices=["best", "latest"], default=None,
+                        help="Defaults to the run's export policy")
     parser.add_argument("--publish-gnn", action="store_true", help="Copy the small standalone GNN export into the report")
     parser.add_argument("--resume-report", action="store_true", help="Reuse completed ranking files, plots and per-stage metrics")
     parser.add_argument("--refresh-summary", action="store_true", help="Refresh Markdown and curves only; do not load graphs or models")
@@ -201,7 +203,8 @@ def main():
     if file_digest(spec["dataset"]) != spec["dataset_digest"]:
         raise ValueError("dataset content differs from the trained run")
     data = np.load(spec["dataset"], allow_pickle=False)
-    checkpoint_path = tf.train.latest_checkpoint(str(args.run_dir / "best"))
+    checkpoint_policy = args.checkpoint or spec.get("export_checkpoint", "best")
+    checkpoint_path = tf.train.latest_checkpoint(str(args.run_dir / ("best" if checkpoint_policy == "best" else "checkpoints")))
     if checkpoint_path is None:
         raise ValueError("no validation-selected checkpoint")
     identity = dict(dataset_digest=spec["dataset_digest"], checkpoint=str(Path(checkpoint_path).resolve()),
@@ -344,7 +347,20 @@ def main():
         stage("shallow_final_known_valid", lambda: shallow_evaluate(model, data, args.negatives, args.triples, context=shallow_context))
         del shallow_context
     completed_steps = int(tf.train.load_checkpoint(latest).get_tensor("step/.ATTRIBUTES/VARIABLE_VALUE"))
+    coverage = None
+    selected_coverage = None
+    if spec.get("entity_passes", 0):
+        from .inductive_schedule import EntityCoverageSchedule
+        schedule = EntityCoverageSchedule(int(data["num_train_nodes"]), spec["batch_size"],
+                                          spec["entity_passes"], spec["seed"])
+        coverage = schedule.progress(completed_steps)
+        selected_steps = completed_steps if checkpoint_policy == "latest" else int(
+            json.loads((args.run_dir / "best.json").read_text())["step"])
+        selected_coverage = schedule.progress(selected_steps)
+    seed_draws = coverage["supervised_anchor_draws"] if coverage else completed_steps * spec["batch_size"]
     summary = dict(run=spec, checkpoint=checkpoint_path, shallow_checkpoint=latest,
+                   selected_checkpoint_policy=checkpoint_policy, coverage=coverage,
+                   selected_model_coverage=selected_coverage,
                    best=json.loads((args.run_dir / "best.json").read_text()),
                    environment=json.loads((args.run_dir / "environment.json").read_text()),
                    splits={key: len(data[key]) for key in ("train", "valid", "support", "test", "temporal_valid", "temporal_test") if key in data},
@@ -352,8 +368,8 @@ def main():
                    num_unseen_nodes=len(data["node_ids"]) - int(data["num_train_nodes"]),
                    num_sampled_heldout_nodes=len(data["heldout_nodes"] if "heldout_nodes" in data else data["unseen_nodes"]),
                    num_relations=len(data["relation_ids"]),
-                   completed_steps=completed_steps, positive_seed_draws=completed_steps * spec["batch_size"],
-                   seed_draw_equivalent_epochs=completed_steps * spec["batch_size"] / len(data["train"]),
+                   completed_steps=completed_steps, positive_seed_draws=seed_draws,
+                   seed_draw_equivalent_epochs=seed_draws / len(data["train"]),
                    validation_initial=curves[0], validation_final=curves[-1],
                    training_initial=losses[0], training_final=losses[-1],
                    visualization=visualization, results=results)
@@ -367,7 +383,7 @@ def render_summary(summary, output):
     checkpoint_path = summary["checkpoint"]
     completed_steps = summary["completed_steps"]
     table = ["# Inductive YAGO graph-autoencoder results", "",
-             f"Validation-selected checkpoint: `{checkpoint_path}`.", "",
+             f"{'Validation-selected' if summary.get('selected_checkpoint_policy', 'best') == 'best' else 'Latest training'} checkpoint: `{checkpoint_path}`.", "",
              "All test metrics below are sampled-filtered tail prediction, not full ranking.", "",
              "| Test model / candidate policy | MRR | Hits@1 | Hits@10 |",
              "|---|---:|---:|---:|"]
@@ -390,6 +406,12 @@ def render_summary(summary, output):
               "The entire training graph is available as context; this is not an exhaustive supervised pass.",
               f"Final shallow-table known-entity validation MRR: {results['shallow_final_known_valid']['mrr']:.4f}.",
               "The transferable GNN and contextual decoder are distinct from the shallow ID tables."]
+    if summary.get("selected_model_coverage"):
+        progress = summary["selected_model_coverage"]
+        table += ["", f"Selected GNN coverage: {progress['completed_entity_passes']} complete entity passes; "
+                  f"{progress['supervised_anchor_draws']:,} supervised anchor draws; "
+                  f"minimum {progress['guaranteed_minimum_supervised_appearances_per_entity']} positive endpoint appearances per training entity.",
+                  "Coverage is not a convergence guarantee or a claim of two exhaustive edge epochs."]
     table += ["", "![Learning curves](learning_curves.png)", "", "![Contextual GNN t-SNE](gnn_tsne.png)",
               "", "![Shallow embeddings t-SNE](shallow_tsne.png)", "",
               "t-SNE labels describe observed neighborhoods and are diagnostic, not a semantic benchmark.",

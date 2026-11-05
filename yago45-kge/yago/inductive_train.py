@@ -30,6 +30,12 @@ def main():
     parser.add_argument("--dataset", required=True, type=Path)
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--steps", type=int, default=5000, help="Total target steps, including restored steps")
+    parser.add_argument("--entity-passes", type=int, default=0,
+                        help="Cover every training entity this many times; derives --steps instead of random fact sampling")
+    parser.add_argument("--export-checkpoint", choices=["best", "latest"], default=None,
+                        help="Default: latest for entity coverage, best for random training")
+    parser.add_argument("--residual", action=argparse.BooleanOptionalAction, default=None,
+                        help="Per-message-step residual connections (tf-gnns already defaults to residual)")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--negatives", type=int, default=16)
@@ -59,6 +65,9 @@ def main():
     parser.add_argument("--validation-split", choices=["valid", "temporal_valid"], default="valid")
     parser.add_argument("--no-export", action="store_true")
     args = parser.parse_args()
+    if args.entity_passes < 0:
+        parser.error("--entity-passes cannot be negative")
+    export_checkpoint = args.export_checkpoint or ("latest" if args.entity_passes else "best")
     sampling_version = args.sampling_version
     if sampling_version is None and args.resume and (args.run_dir / "run.json").exists():
         sampling_version = json.loads((args.run_dir / "run.json").read_text()).get("sampling_version", 1)
@@ -79,6 +88,13 @@ def main():
         parser.error(f"dataset has no nonempty {args.validation_split} split")
     num_nodes, num_relations = len(data["node_ids"]), len(data["relation_ids"])
     num_train_nodes = int(data["num_train_nodes"])
+    schedule = None
+    if args.entity_passes:
+        from .inductive_schedule import EntityCoverageSchedule
+        schedule = EntityCoverageSchedule(num_train_nodes, args.batch_size, args.entity_passes, args.seed)
+        args.steps = schedule.total_steps
+        print(f"entity coverage: {args.entity_passes} passes × {num_train_nodes:,} entities; "
+              f"{args.steps:,} updates (overrides --steps); export={export_checkpoint}", flush=True)
     base_dim = args.dim if args.base_dim is None else args.base_dim
     if base_dim <= 0 or base_dim % 2:
         parser.error("--base-dim must be a positive even integer")
@@ -104,7 +120,12 @@ def main():
                 shallow_weight=args.shallow_weight, seed=args.seed,
                 features=f"log1p masked {args.feature_mode} directional relation counts + generic Entity constant",
                 encoder=f"ID-independent {args.encoder} mean message passing",
-                decoder="ComplEx", representation="normalized contextual GNN states + separate shallow tables")
+                 decoder="ComplEx", representation="normalized contextual GNN states + separate shallow tables")
+    if args.residual is not None:
+        spec["model"]["residual"] = args.residual
+    if schedule is not None or args.export_checkpoint is not None:
+        spec.update(entity_passes=args.entity_passes, export_checkpoint=export_checkpoint,
+                    positive_schedule="entity-affine-v1" if schedule else "random-facts")
     args.run_dir.mkdir(parents=True, exist_ok=True)
     config_path = args.run_dir / "run.json"
     if args.resume:
@@ -133,6 +154,8 @@ def main():
     tf.keras.utils.set_random_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     model = InductiveAutoencoder(**spec["model"])
+    shallow_parameter_ids = {id(v) for layer in (model.entity_table, model.base_relations) for v in layer.variables}
+    print(f"GNN/decoder parameters: {sum(int(np.prod(v.shape)) for v in model.trainable_variables if id(v) not in shallow_parameter_ids):,}", flush=True)
     optimizer = tf.keras.optimizers.Adam(args.learning_rate)
     shallow_variables = model.entity_table.trainable_variables + model.base_relations.trainable_variables
     shallow_ids = {id(variable) for variable in shallow_variables}
@@ -192,6 +215,8 @@ def main():
                                 snapshot_path=args.run_dir / "snapshots" / "train" if args.sampler.startswith("gestaltdb") else None,
                                 feature_mode=args.feature_mode, compact=args.sampler == "gestaltdb-csr",
                                 sampling_version=sampling_version)
+    if schedule is not None:
+        schedule.validate_graph(context)
     # Training negatives are filtered against TRAIN ONLY; no test/support access.
     training_known = GraphKnownObjects(context)
     validation_known = GraphKnownObjects(context, data["valid"], data[args.validation_split])
@@ -227,6 +252,12 @@ def main():
     def save():
         rng_state.assign(json.dumps(rng.bit_generator.state))
         path = manager.save(checkpoint_number=int(step.numpy()))
+        if schedule is not None:
+            progress = schedule.progress(int(step.numpy()))
+            progress["checkpoint"] = path
+            temporary = args.run_dir / "coverage.tmp"
+            temporary.write_text(json.dumps(progress, indent=2))
+            temporary.replace(args.run_dir / "coverage.json")
         print(f"saved {path}", flush=True)
 
     def validate(current, losses=None):
@@ -287,7 +318,12 @@ def main():
             if stop_requested:
                 save()
                 break
-            positive = train[rng.integers(len(train), size=args.batch_size)]
+            if schedule is None:
+                positive = train[rng.integers(len(train), size=args.batch_size)]
+            else:
+                anchors, positive = schedule.positives(context, current - 1, rng)
+                if not np.all((positive[:, 0] == anchors) | (positive[:, 2] == anchors)):
+                    raise AssertionError("supervised positives do not contain scheduled entities")
             negative = np.repeat(positive[:, None, :], args.negatives, axis=1)
             # Filtered tail corruptions; bounded retries fail loudly rather than
             # quietly labeling a known fact as false in dense relation ranges.
@@ -326,7 +362,9 @@ def main():
                 elapsed = time.perf_counter() - t0
                 row = dict(step=current, loss=float(losses[0]), gnn_loss=float(losses[1]),
                            shallow_loss=float(losses[2]), elapsed_seconds=elapsed,
-                           steps_per_second=(current - start) / max(elapsed, 1e-9))
+                            steps_per_second=(current - start) / max(elapsed, 1e-9))
+                if schedule is not None:
+                    row["coverage"] = schedule.progress(current)
                 with train_log.open("a") as handle:
                     handle.write(json.dumps(row) + "\n")
                 print(f"step={current} loss={float(losses[0]):.4f} "
@@ -363,8 +401,8 @@ def main():
             metadata["node_mapping_path"] = str(data["node_mapping_path"])
         (args.run_dir / "artifact_metadata.json").write_text(json.dumps(metadata, indent=2))
         # The standalone GNN must not require a multi-gigabyte ID table at
-        # inference. Export the validation-selected encoder and decoder only.
-        best_checkpoint = best_manager.latest_checkpoint
+        # inference. Coverage runs default to latest, not an earlier best model.
+        best_checkpoint = best_manager.latest_checkpoint if export_checkpoint == "best" else manager.latest_checkpoint
         if best_checkpoint:
             restored = tf.train.Checkpoint(model=model).restore(best_checkpoint)
             restored.assert_existing_objects_matched()
@@ -373,6 +411,8 @@ def main():
         export_encoder(model, args.run_dir / "gnn_saved_model")
         (args.run_dir / "gnn_saved_model" / "metadata.json").write_text(json.dumps(dict(
             source_checkpoint=best_checkpoint, feature_recipe=spec["features"],
+            checkpoint_policy=export_checkpoint,
+            coverage=schedule.progress(int(step.numpy())) if schedule is not None and export_checkpoint == "latest" else None,
             relation_ids=data["relation_ids"].tolist(), output_dim=args.dim,
             entity_ids_required=False), indent=2))
     print(f"completed step {int(step.numpy())}; contextual inference: python -m yago.inductive_eval "

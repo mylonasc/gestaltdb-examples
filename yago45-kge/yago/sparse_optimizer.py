@@ -33,13 +33,14 @@ class SparseAdagrad(tf.Module):
         for gradient, variable in pairs:
             resource = variable.value if not isinstance(variable, tf.Variable) else variable
             accumulator = self.accumulators[self.indices[id(variable)]]
-            kwargs = dict(var=resource.handle, accum=accumulator.handle,
-                          lr=tf.cast(self.learning_rate, resource.dtype),
-                          epsilon=tf.cast(self.epsilon, resource.dtype), update_slots=True)
-            if isinstance(gradient, tf.IndexedSlices):
-                indices, segment = tf.unique(gradient.indices)
-                values = tf.math.unsorted_segment_sum(gradient.values, segment, tf.shape(indices)[0])
-                tf.raw_ops.ResourceSparseApplyAdagradV2(grad=values, indices=indices, **kwargs)
-            else:
-                tf.raw_ops.ResourceApplyAdagradV2(grad=gradient, **kwargs)
+            with tf.device(resource.device):
+                kwargs = dict(var=resource.handle, accum=accumulator.handle,
+                              lr=tf.cast(self.learning_rate, resource.dtype),
+                              epsilon=tf.cast(self.epsilon, resource.dtype), update_slots=True)
+                if isinstance(gradient, tf.IndexedSlices):
+                    indices, segment = tf.unique(gradient.indices)
+                    values = tf.math.unsorted_segment_sum(gradient.values, segment, tf.shape(indices)[0])
+                    tf.raw_ops.ResourceSparseApplyAdagradV2(grad=values, indices=indices, **kwargs)
+                else:
+                    tf.raw_ops.ResourceApplyAdagradV2(grad=gradient, **kwargs)
         self.iterations.assign_add(1)

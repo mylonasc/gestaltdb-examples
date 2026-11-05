@@ -2,18 +2,27 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.metadata
 import json
+import signal
 import time
 from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
 
-from .inductive_data import GraphKnownObjects, NeighborhoodGraph, mapping_digest
+from .inductive_data import GraphKnownObjects, NeighborhoodGraph, file_digest, mapping_digest
 from .inductive_eval import evaluate
 from .inductive_model import InductiveAutoencoder, infonce
+
+
+def reconcile_completed_step(completed, *optimizer_steps):
+    """Handle legacy SIGINT between a completed update and step.assign()."""
+    if all(value == completed for value in optimizer_steps):
+        return completed
+    if all(value == completed + 1 for value in optimizer_steps):
+        return completed + 1
+    raise ValueError(f"inconsistent checkpoint: completed={completed}, optimizer steps={optimizer_steps}")
 
 
 def main():
@@ -39,6 +48,7 @@ def main():
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument("--encoder", choices=["relational", "tf-gnns"], default="tf-gnns")
     parser.add_argument("--sampler", choices=["numpy", "gestaltdb", "gestaltdb-csr"], default="gestaltdb")
+    parser.add_argument("--sampling-version", choices=[1, 2], type=int, default=None)
     parser.add_argument("--require-gpu", action="store_true")
     parser.add_argument("--negative-policy", choices=["uniform", "mixed", "relation-range"], default="uniform")
     parser.add_argument("--validation-policy", choices=["uniform", "relation-range", "both"], default="uniform")
@@ -49,6 +59,10 @@ def main():
     parser.add_argument("--validation-split", choices=["valid", "temporal_valid"], default="valid")
     parser.add_argument("--no-export", action="store_true")
     args = parser.parse_args()
+    sampling_version = args.sampling_version
+    if sampling_version is None and args.resume and (args.run_dir / "run.json").exists():
+        sampling_version = json.loads((args.run_dir / "run.json").read_text()).get("sampling_version", 1)
+    sampling_version = 2 if sampling_version is None else sampling_version
     gpus = tf.config.list_physical_devices("GPU")
     if args.require_gpu and not gpus:
         parser.error("GPU required but TensorFlow cannot see one; run via scripts/inductive.sh")
@@ -73,16 +87,13 @@ def main():
     table_factor = {"sgd": 1, "adam": 3, "sparse-adagrad": 2}[args.shallow_optimizer]
     print(f"shallow table + optimizer slots: approximately {num_train_nodes * base_dim * 4 * table_factor / 2**30:.2f} GiB", flush=True)
     # Hash the exact dataset, not just its shape, to prevent silent split drift.
-    digest = hashlib.sha256()
-    with args.dataset.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    spec = dict(dataset=str(args.dataset.resolve()), dataset_digest=digest.hexdigest(),
+    spec = dict(dataset=str(args.dataset.resolve()), dataset_digest=file_digest(args.dataset),
                 mapping_digest=mapping_digest(data),
                 model=dict(num_train_nodes=num_train_nodes, num_relations=num_relations,
                            dim=args.dim, base_dim=base_dim, embedding_device=args.embedding_device,
                            hidden_dim=args.hidden_dim, layers=len(args.fanouts), encoder=args.encoder),
                 sampler=args.sampler,
+                sampling_version=sampling_version,
                 shallow_optimizer=args.shallow_optimizer, shallow_learning_rate=args.shallow_learning_rate,
                 validation_split=args.validation_split,
                 validation_queries=args.eval_triples,
@@ -109,6 +120,7 @@ def main():
         saved.setdefault("shallow_learning_rate", None)
         saved.setdefault("validation_split", "valid")
         saved.setdefault("validation_queries", args.eval_triples)
+        saved.setdefault("sampling_version", 1)
         if saved != spec:
             parser.error("resume configuration/dataset differs; reuse the original training arguments")
     elif config_path.exists() or any(args.run_dir.iterdir()):
@@ -152,6 +164,13 @@ def main():
         if manager.latest_checkpoint is None:
             parser.error("no checkpoint to resume")
         checkpoint.restore(manager.latest_checkpoint).assert_consumed()
+        optimizer_steps = [int(optimizer.iterations.numpy())]
+        if shallow_optimizer is not None:
+            optimizer_steps.append(int(shallow_optimizer.iterations.numpy()))
+        restored_steps = reconcile_completed_step(int(step.numpy()), *optimizer_steps)
+        if restored_steps != int(step.numpy()):
+            print(f"reconciled legacy interrupted step counter to completed optimizer step {restored_steps}", flush=True)
+            step.assign(restored_steps)
         rng.bit_generator.state = json.loads(rng_state.numpy().decode())
         print(f"resumed {manager.latest_checkpoint} at step {int(step.numpy())}", flush=True)
     start = int(step.numpy())
@@ -171,7 +190,8 @@ def main():
 
     context = NeighborhoodGraph(train, num_nodes, num_relations,
                                 snapshot_path=args.run_dir / "snapshots" / "train" if args.sampler.startswith("gestaltdb") else None,
-                                feature_mode=args.feature_mode, compact=args.sampler == "gestaltdb-csr")
+                                feature_mode=args.feature_mode, compact=args.sampler == "gestaltdb-csr",
+                                sampling_version=sampling_version)
     # Training negatives are filtered against TRAIN ONLY; no test/support access.
     training_known = GraphKnownObjects(context)
     validation_known = GraphKnownObjects(context, data["valid"], data[args.validation_split])
@@ -236,6 +256,7 @@ def main():
         return metrics
 
     if not args.resume:
+        save()  # baseline/evaluation/first compilation can also be interrupted
         validate(0)
 
     train_log = args.run_dir / "train_losses.jsonl"
@@ -250,9 +271,22 @@ def main():
                 continue
         train_log.write_text("".join(json.dumps(row) + "\n" for row in records))
     t0 = time.perf_counter()
+    stop_requested = False
+
+    def request_stop(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    # Do not interrupt an optimizer call or save the RNG halfway through a
+    # sampled batch. Both signals request a checkpoint at an update boundary.
+    previous_handlers = {signum: signal.signal(signum, request_stop)
+                         for signum in (signal.SIGINT, signal.SIGTERM)}
 
     try:
         for current in range(start + 1, args.steps + 1):
+            if stop_requested:
+                save()
+                break
             positive = train[rng.integers(len(train), size=args.batch_size)]
             negative = np.repeat(positive[:, None, :], args.negatives, axis=1)
             # Filtered tail corruptions; bounded retries fail loudly rather than
@@ -298,14 +332,23 @@ def main():
                 print(f"step={current} loss={float(losses[0]):.4f} "
                       f"gnn={float(losses[1]):.4f} shallow={float(losses[2]):.4f} "
                       f"steps/s={row['steps_per_second']:.2f}", flush=True)
-            if current % args.checkpoint_every == 0 or current == args.steps:
+            if current % args.checkpoint_every == 0 or current == args.steps or stop_requested:
                 save()  # checkpoint BEFORE potentially expensive evaluation/export
+            if stop_requested:
+                break
             if current % args.eval_every == 0 or current == args.steps:
                 validate(current, losses)
     except KeyboardInterrupt:
         # Only completed updates count. SIGKILL/power loss uses periodic saves.
         save()
         raise
+    finally:
+        for signum, previous in previous_handlers.items():
+            signal.signal(signum, previous)
+
+    if stop_requested:
+        print(f"stopped after checkpointing complete step {int(step.numpy())}; resume with --resume", flush=True)
+        return
 
     if not args.no_export:
         np.savez_compressed(args.run_dir / "shallow_embeddings.npz",
@@ -319,6 +362,19 @@ def main():
         if "node_mapping_path" in data:
             metadata["node_mapping_path"] = str(data["node_mapping_path"])
         (args.run_dir / "artifact_metadata.json").write_text(json.dumps(metadata, indent=2))
+        # The standalone GNN must not require a multi-gigabyte ID table at
+        # inference. Export the validation-selected encoder and decoder only.
+        best_checkpoint = best_manager.latest_checkpoint
+        if best_checkpoint:
+            restored = tf.train.Checkpoint(model=model).restore(best_checkpoint)
+            restored.assert_existing_objects_matched()
+            restored.expect_partial()
+        from .inductive_export import export_encoder
+        export_encoder(model, args.run_dir / "gnn_saved_model")
+        (args.run_dir / "gnn_saved_model" / "metadata.json").write_text(json.dumps(dict(
+            source_checkpoint=best_checkpoint, feature_recipe=spec["features"],
+            relation_ids=data["relation_ids"].tolist(), output_dim=args.dim,
+            entity_ids_required=False), indent=2))
     print(f"completed step {int(step.numpy())}; contextual inference: python -m yago.inductive_eval "
           f"--run-dir {args.run_dir}", flush=True)
 

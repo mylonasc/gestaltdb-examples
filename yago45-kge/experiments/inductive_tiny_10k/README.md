@@ -23,13 +23,9 @@ See summary.json for confidence intervals, frequency/random controls, per-relati
 
 ## Candidate calibration and controls
 
-| Policy | GNN MRR | Frequency MRR (pessimistic ties) | Frequency MRR (expected ties) |
-|---|---:|---:|---:|
-| Uniform | 0.1584 | 0.7440 | 0.7623 |
-| Relation-range | 0.5849 | 0.4417 | 0.4511 |
+| Policy | GNN MRR | Frequency MRR (pessimistic ties) | Frequency MRR (expected ties) | Random expected MRR |
+|---|---:|---:|---:|---:|
+| uniform | 0.1584 | 0.7440 | 0.7623 | 0.0886 |
+| relation-range | 0.5849 | 0.4417 | 0.4511 | 0.0939 |
 
-**Limitation:** range-only negatives produce poor global candidate calibration.
-This checkpoint must not be presented as good candidate-independent completion.
-The same failure is confirmed on validation (uniform MRR 0.1550), motivating a
-separate mixed-negative experiment with balanced validation selection. The
-original results above are retained, not replaced by a favorable policy alone.
+**Limitation:** this checkpoint underperforms the frequency control on global uniform candidates. Strong relation-range results must not be presented as good candidate-independent completion. Training-negative policy and checkpoint-selection policy matter.

@@ -56,7 +56,9 @@ class InductiveAutoencoder(tf.keras.Model):
             setattr(self, f"self_transform_{i}", self_transform)
         self.output_projection = tf.keras.layers.Dense(dim)
         self.context_relations = tf.keras.layers.Embedding(num_relations, dim)
-        with tf.device("/CPU:0" if embedding_device == "cpu" else "/GPU:0" if tf.config.list_physical_devices("GPU") else "/CPU:0"):
+        self.shallow_device = "/CPU:0" if embedding_device == "cpu" else "/GPU:0" if tf.config.list_physical_devices("GPU") else "/CPU:0"
+        self.cpu_embeddings = embedding_device == "cpu"
+        with tf.device(self.shallow_device):
             self.entity_table = tf.keras.layers.Embedding(num_train_nodes, base_dim)
             self.base_relations = tf.keras.layers.Embedding(num_relations, base_dim)
             self.entity_table(tf.constant([0]))
@@ -75,8 +77,6 @@ class InductiveAutoencoder(tf.keras.Model):
                     if component is not None:
                         setattr(self, f"gnn_component_{i}_{name}", component)
         self.context_relations(tf.constant([0]))
-        self.entity_table(tf.constant([0]))
-        self.base_relations(tf.constant([0]))
 
     def encode(self, graph):
         h = self.input_projection(graph["features"])
@@ -105,6 +105,21 @@ class InductiveAutoencoder(tf.keras.Model):
         return self.contextual_scores(self.encode(graph), triples)
 
     def shallow_scores(self, triples):
-        return complex_score(self.entity_table(triples[..., 0]),
-                             self.base_relations(triples[..., 1]),
-                             self.entity_table(triples[..., 2]))
+        # Variable placement alone is insufficient: an unplaced Keras gather
+        # may execute on GPU and transfer the *entire* CPU table there first.
+        with tf.device(self.shallow_device):
+            return complex_score(self._base_lookup(self.entity_table, triples[..., 0]),
+                                 self._base_lookup(self.base_relations, triples[..., 1]),
+                                 self._base_lookup(self.entity_table, triples[..., 2]))
+
+    def _base_lookup(self, layer, ids):
+        if self.cpu_embeddings:
+            # ResourceGather reads just the requested rows. ReadVariableOp +
+            # GatherV2 can hold a full-table tensor alive during backprop and
+            # trigger multi-GB copy-on-write before the sparse optimizer runs.
+            return layer.embeddings.value.sparse_read(ids)
+        return layer(ids)
+
+    def base_vectors(self, ids):
+        with tf.device(self.shallow_device):
+            return self._base_lookup(self.entity_table, tf.convert_to_tensor(ids))

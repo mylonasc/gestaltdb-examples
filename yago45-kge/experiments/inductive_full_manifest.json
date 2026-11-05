@@ -1,0 +1,143 @@
+{
+  "status": "20,000-step full-graph training completed; held-out evaluation and cache export in progress",
+  "completed_steps": 20000,
+  "best_validation_step": 18000,
+  "best_balanced_temporal_validation_mrr": 0.7812955785378033,
+  "source_url": "https://yago-knowledge.org/data/yago4.5/yago-4.5.0.2.zip",
+  "source_sha256": "b226ba9ce82e3c13187c501bca39c766cb243d0ed02c6b5137146370fadb8a8a",
+  "archive_members": [
+    {
+      "name": "yago-schema.ttl",
+      "bytes": 36440,
+      "compressed_bytes": 5867,
+      "crc32": "5fee1dff"
+    },
+    {
+      "name": "yago-facts.ttl",
+      "bytes": 23016016320,
+      "compressed_bytes": 2867215170,
+      "crc32": "2e3b5b26"
+    },
+    {
+      "name": "yago-beyond-wikipedia.ttl",
+      "bytes": 127976262040,
+      "compressed_bytes": 9387809155,
+      "crc32": "891a83da"
+    },
+    {
+      "name": "yago-meta-facts.ntx",
+      "bytes": 1020360255,
+      "compressed_bytes": 105765968,
+      "crc32": "edfd6bca"
+    },
+    {
+      "name": "yago-taxonomy.ttl",
+      "bytes": 13351675,
+      "compressed_bytes": 2125636,
+      "crc32": "28b2b209"
+    }
+  ],
+  "raw_turtle_lines": 1784222507,
+  "raw_retained_entity_triples": 119045262,
+  "entity_triples_after_temporal_exclusion_before_dedup": 118447891,
+  "array_shapes": {
+    "train": [
+      96428602,
+      3
+    ],
+    "valid": [
+      10000,
+      3
+    ],
+    "support": [
+      21783785,
+      3
+    ],
+    "test": [
+      10000,
+      3
+    ],
+    "num_train_nodes": [],
+    "unseen_nodes": [
+      5818093
+    ],
+    "heldout_nodes": [
+      4928192
+    ],
+    "temporal_valid": [
+      416985,
+      3
+    ],
+    "temporal_valid_years": [
+      416985
+    ],
+    "temporal_test": [
+      62236,
+      3
+    ],
+    "temporal_test_years": [
+      62236
+    ],
+    "temporal_cutoffs": [
+      2
+    ],
+    "node_ids": [
+      49281921
+    ],
+    "relation_ids": [
+      63
+    ],
+    "seed": [],
+    "node_mapping_path": [],
+    "source_mode": []
+  },
+  "num_train_nodes": 43463828,
+  "temporal_cutoffs": [
+    2010,
+    2018
+  ],
+  "temporal_semantics": "valid-time completion with undated static background; not causal knowledge-acquisition forecasting",
+  "recipe": {
+    "dataset": "/home/charilaos/Workspace/gestaltdb-examples/data/yago45_full/inductive.npz",
+    "dataset_digest": "07e72b619dd2a71bb0d2c9f1ca9346fbc13c645625a399f435e036c9414ca1d2",
+    "mapping_digest": "6e892f3599bc4a17a829660890fbbe0f85baabff5bf8710bfa366b6de9e4ee59",
+    "model": {
+      "num_train_nodes": 43463828,
+      "num_relations": 63,
+      "dim": 200,
+      "base_dim": 32,
+      "embedding_device": "cpu",
+      "hidden_dim": 64,
+      "layers": 2,
+      "encoder": "tf-gnns"
+    },
+    "sampler": "gestaltdb-csr",
+    "sampling_version": 2,
+    "shallow_optimizer": "sparse-adagrad",
+    "shallow_learning_rate": 0.05,
+    "validation_split": "temporal_valid",
+    "validation_queries": 300,
+    "feature_mode": "full",
+    "negative_policy": "mixed",
+    "validation_policy": "both",
+    "fanouts": [
+      8,
+      4
+    ],
+    "batch_size": 128,
+    "negatives": 8,
+    "learning_rate": 0.001,
+    "temperature": 0.1,
+    "shallow_weight": 1.0,
+    "seed": 13,
+    "features": "log1p masked full directional relation counts + generic Entity constant",
+    "encoder": "ID-independent tf-gnns mean message passing",
+    "decoder": "ComplEx",
+    "representation": "normalized contextual GNN states + separate shallow tables"
+  },
+  "planned_steps": 20000,
+  "planned_positive_seed_draws": 2560000,
+  "planned_seed_draw_equivalent_epochs": 0.026548139731404588,
+  "hardware": "NVIDIA GeForce RTX 4090, 24 GiB GPU; 62 GiB host RAM",
+  "data_scope": "All Turtle members; no line limit or edge cap; literals/text excluded by structural KG definition"
+}

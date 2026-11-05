@@ -14,7 +14,7 @@ from .inductive_model import InductiveAutoencoder
 
 def evaluate(model, context, queries, all_known, candidate_pool, *, fanouts,
              negatives=50, max_queries=200, seed=12345, candidate_policy="uniform",
-             include_details=False, message_passing=True):
+             include_details=False, message_passing=True, cached_vectors=None):
     """Sampled-filtered tail ranking; encode true and negative candidates equally."""
     rng = np.random.default_rng(seed)
     selected = rng.choice(len(queries), min(max_queries, len(queries)), replace=False)
@@ -29,14 +29,19 @@ def evaluate(model, context, queries, all_known, candidate_pool, *, fanouts,
         s, r, _ = map(int, query)
         pool = ranges[r] if candidate_policy == "relation-range" else candidate_pool
         candidates = sampled_candidates(query, pool, negatives, all_known, rng)
-        ids, graph = context.sample(np.r_[s, candidates], fanouts, rng, masked=[query])
-        if not message_passing:
-            for key in ("senders", "receivers", "relations"):
-                graph[key] = np.empty(0, dtype=np.int32)
-        local = np.stack([np.full(len(candidates), np.searchsorted(ids, s)),
-                          np.full(len(candidates), r), np.searchsorted(ids, candidates)], axis=1)
-        scores = model.predict_graph({key: tf.convert_to_tensor(value) for key, value in graph.items()},
-                                     tf.convert_to_tensor(local, tf.int32)).numpy()
+        if cached_vectors is not None:
+            subjects = np.repeat(np.asarray(cached_vectors[s:s + 1], dtype=np.float32), len(candidates), axis=0)
+            objects = np.asarray(cached_vectors[candidates], dtype=np.float32)
+            scores = model.score_embeddings(subjects, np.full(len(candidates), r, dtype=np.int32), objects).numpy()
+        else:
+            ids, graph = context.sample(np.r_[s, candidates], fanouts, rng, masked=[query])
+            if not message_passing:
+                for key in ("senders", "receivers", "relations"):
+                    graph[key] = np.empty(0, dtype=np.int32)
+            local = np.stack([np.full(len(candidates), np.searchsorted(ids, s)),
+                              np.full(len(candidates), r), np.searchsorted(ids, candidates)], axis=1)
+            scores = model.predict_graph({key: tf.convert_to_tensor(value) for key, value in graph.items()},
+                                         tf.convert_to_tensor(local, tf.int32)).numpy()
         ranks.append(1 + np.sum(scores[1:] >= scores[0]))
         counts.append(len(candidates))
         freq = np.asarray([frequencies[r].get(int(o), 0) for o in candidates])
@@ -73,6 +78,8 @@ def evaluate(model, context, queries, all_known, candidate_pool, *, fanouts,
     result["mrr_nontrivial_queries"] = float(np.mean(rr[nontrivial])) if np.any(nontrivial) else None
     if include_details:
         result["details"] = details
+    if cached_vectors is not None:
+        result["protocol"] = "cached GNN embeddings + contextual decoder, sampled-filtered tails"
     return result
 
 
@@ -85,6 +92,7 @@ def main():
     parser.add_argument("--negatives", type=int, default=50)
     parser.add_argument("--checkpoint", choices=["best", "latest"], default="best")
     parser.add_argument("--candidate-policy", choices=["uniform", "relation-range"], default="uniform")
+    parser.add_argument("--saved-model", action="store_true", help="Use the lightweight exported GNN, without loading ID tables")
     args = parser.parse_args()
     for gpu in tf.config.list_physical_devices("GPU"):
         tf.config.experimental.set_memory_growth(gpu, True)
@@ -93,15 +101,21 @@ def main():
     spec = json.loads((args.run_dir / "run.json").read_text())
     dataset = args.dataset or Path(spec["dataset"])
     data = np.load(dataset, allow_pickle=False)
-    model = InductiveAutoencoder(**spec["model"])
-    checkpoint_dir = args.run_dir / ("best" if args.checkpoint == "best" else "checkpoints")
-    latest = tf.train.latest_checkpoint(str(checkpoint_dir))
-    if latest is None:
-        parser.error("run has no checkpoint")
-    # Full training checkpoint includes optimizer and step, unused in inference.
-    status = tf.train.Checkpoint(model=model).restore(latest)
-    status.assert_existing_objects_matched()
-    status.expect_partial()
+    if args.saved_model:
+        if args.checkpoint != "best":
+            parser.error("the standalone SavedModel is validation-selected; use --checkpoint best")
+        latest = str(args.run_dir / "gnn_saved_model")
+        model = tf.saved_model.load(latest)
+    else:
+        model = InductiveAutoencoder(**spec["model"])
+        checkpoint_dir = args.run_dir / ("best" if args.checkpoint == "best" else "checkpoints")
+        latest = tf.train.latest_checkpoint(str(checkpoint_dir))
+        if latest is None:
+            parser.error("run has no checkpoint")
+        # Full training checkpoint includes optimizer and step, unused in inference.
+        status = tf.train.Checkpoint(model=model).restore(latest)
+        status.assert_existing_objects_matched()
+        status.expect_partial()
     if mapping_digest(data) != spec["mapping_digest"]:
         parser.error("dataset mappings differ from the trained run")
     train = data["train"]
@@ -114,7 +128,8 @@ def main():
     context = NeighborhoodGraph(edges, len(data["node_ids"]), len(data["relation_ids"]),
                                 snapshot_path=args.run_dir / "snapshots" / args.split
                                 if spec.get("sampler", "").startswith("gestaltdb") else None,
-                                feature_mode=spec.get("feature_mode", "sampled"), compact=spec.get("sampler") == "gestaltdb-csr")
+                                feature_mode=spec.get("feature_mode", "sampled"), compact=spec.get("sampler") == "gestaltdb-csr",
+                                sampling_version=spec.get("sampling_version", 1))
     known = GraphKnownObjects(context, *(data[key] for key in ("valid", "test", "temporal_valid", "temporal_test") if key in data))
     result = evaluate(model, context, data[args.split], known, pool,
                       fanouts=spec["fanouts"], negatives=args.negatives, max_queries=args.triples,
@@ -122,10 +137,10 @@ def main():
     result.update(split=args.split, checkpoint=latest,
                   context="train + inference support" if args.split == "test" else "train only")
     if args.split == "test":
-        unseen = set(map(int, data["unseen_nodes"]))
-        result["unseen_entity_count"] = len(unseen)
+        first_unseen = int(data["num_train_nodes"])
+        result["unseen_entity_count"] = len(data["node_ids"]) - first_unseen
         result["all_test_queries_touch_unseen_entity"] = all(
-            int(s) in unseen or int(o) in unseen for s, _, o in data["test"])
+            int(s) >= first_unseen or int(o) >= first_unseen for s, _, o in data["test"])
     output = args.run_dir / (f"gnn_{args.split}_evaluation.json" if args.candidate_policy == "uniform"
                              else f"gnn_{args.split}_{args.candidate_policy}_evaluation.json")
     output.write_text(json.dumps(result, indent=2))

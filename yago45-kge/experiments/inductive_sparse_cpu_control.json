@@ -1,0 +1,21 @@
+{
+  "protocol": "shallow known-entity validation, uniform sampled-filtered tails",
+  "queries": 1000,
+  "mrr": 0.22616523822868298,
+  "hits1": 0.153,
+  "hits10": 0.351,
+  "checkpoint": "../data/yago45/inductive_sparse_cpu_control/checkpoints/ckpt-2000",
+  "model": {
+    "num_train_nodes": 234412,
+    "num_relations": 57,
+    "dim": 200,
+    "base_dim": 32,
+    "embedding_device": "cpu",
+    "hidden_dim": 32,
+    "layers": 2,
+    "encoder": "tf-gnns"
+  },
+  "optimizer": "native row-sparse Adagrad",
+  "learning_rate": 0.05,
+  "steps": 2000
+}

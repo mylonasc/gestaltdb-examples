@@ -121,9 +121,17 @@ vectors into this encoder to paper over that limitation.
   matching relation embeddings and external ID maps.
 - `artifact_metadata.json`: shallow representation/scorer metadata.
 - `gnn_test_evaluation.json`: checkpoint-backed contextual GNN evaluation.
+- `gnn_saved_model/`: validation-selected encoder and contextual decoder only,
+  without the large entity-ID or shallow-relation tables. Load with
+  `tf.saved_model.load(path)` and call `.encode(graph)` or
+  `.predict_graph(graph, local_triples)`. `inductive_eval --saved-model` uses
+  this lightweight deployment artifact directly.
 
 Checkpoints are saved every `--checkpoint-every` steps (default 1000), at final
 training completion **before** evaluation/export, and on `KeyboardInterrupt`.
+An initial full-state checkpoint precedes baseline evaluation/first compilation.
+SIGINT and SIGTERM request a stop at an optimizer-step boundary, preserving the
+matching RNG state rather than interrupting a partially sampled batch.
 A hard kill resumes from the latest completed periodic checkpoint. Resume checks
 the dataset and training recipe, restores optimizer/RNG/step, and trims metric
 records beyond the restored step. An occupied run directory cannot accidentally
@@ -166,7 +174,7 @@ bash scripts/inductive.sh prepare --data-root ../data/yago45_full \
 Triple-level `schema:startDate` comes from RDF-star `yago-meta-facts.ntx`, not
 from an entity's birth date. The earliest annotated start determines the cohort;
 out-of-range/sentinel years and years beyond the 2024 source release are excluded.
-All dated post-2010 facts **and their same-relation reverses** are removed before
+All post-2010 facts in this supported dated cohort **and their same-relation reverses** are removed before
 building training and inductive support. Known-training-entity queries dated
 2011–2018 form `temporal_valid`; 2019–2024 form `temporal_test`.
 `--validation-split temporal_valid` selects checkpoints using this chronological
@@ -194,6 +202,51 @@ instead of persisting the many external-ID/membership/relation-policy indexes
 of a complete `SamplerSnapshot`. This is explicitly a thin CSR adapter, not the
 complete GestaltDB snapshot format. `--keep-checkpoints 1` bounds full-state
 checkpoint retention when disk is constrained.
+
+CPU-resident embedding tables require explicitly CPU-placed **lookups** as well
+as CPU variables: otherwise Keras can copy an entire table to the GPU before
+gathering a few rows. Both scores and native sparse updates are explicitly CPU
+placed when requested. Sampling version 2 draws CSR positions directly rather
+than copying/scanning all neighbors of a high-degree hub; labels are rejected
+before expansion, with unchanged uniform sampling. Saved recipes preserve the
+sampler version, including legacy resume behavior.
+
+CPU lookups use native `ResourceGather`, not full-table tensor reads that can
+cause multi-gigabyte copy-on-write during sparse updates.
+
+“Full graph” describes the uncapped dataset and message context, not an assertion
+that every fact has received a supervised update. Reports include completed
+steps, seed draws and seed-draw-equivalent epochs so the actual training budget
+remains explicit.
+
+## Reusable GNN embeddings and lightweight inference
+
+The shallow 32/200-dimensional ID table is not the only static artifact. The
+trained inductive encoder can generate a reusable **200-dimensional GNN cache**
+for every mapped entity, including unseen ones, without loading any ID table:
+
+```bash
+bash scripts/inductive.sh cache --run-dir /path/to/run \
+  --output /path/to/gnn_cache --batch-size 2048
+# A stopped cache job resumes from its flushed row/RNG checkpoint:
+bash scripts/inductive.sh cache --run-dir /path/to/run \
+  --output /path/to/gnn_cache --batch-size 2048 --resume
+```
+
+Default scope is **all** mapped nodes; `--max-nodes` is explicitly a benchmark
+prefix. `gnn_embeddings.npy` is a memory-mappable float16 matrix, with
+`cache.json` recording completion, model/dataset hashes, representation, and
+sampling recipe. Full YAGO's 49.28M x 200 cache requires about 19.7 GB. Before
+encoding, every held-out query and its reverse is globally scrubbed from context
+and degree features. A complete cache is evaluated separately with the matching
+contextual decoder. Its batched sampled-context/float16 representation is not
+silently equated with per-query float32 GNN evaluation.
+
+The SavedModel also exposes `.score_embeddings(subjects, relations, objects)`
+for scoring cached vectors (cast them to float32). Thus deployment can choose
+fast cached link prediction, fresh GNN inference for new/updated neighborhoods,
+or the independently trained shallow ComplEx tables. Generic cosine semantics
+are not guaranteed by any of these relation-conditioned objectives.
 
 ## Tuning and reports
 

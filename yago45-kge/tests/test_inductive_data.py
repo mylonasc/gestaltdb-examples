@@ -78,3 +78,38 @@ def test_full_statistics_mask_a_query_not_present_in_context_without_subtracting
     ids, batch = graph.sample([0, 3], [1], np.random.default_rng(1), masked=[[0, 0, 3]])
     assert batch["features"][np.searchsorted(ids, 0), 0] == np.float32(np.log1p(2))
     assert batch["features"][np.searchsorted(ids, 3), 1] == 0
+
+
+def test_hub_sampling_masks_before_expansion_and_remains_uniform():
+    edges = np.asarray([[0, 0, other] for other in range(1, 1001)])
+    graph = NeighborhoodGraph(edges, 1001, 1, sampling_version=2)
+    rng = np.random.default_rng(13)
+    draws = []
+    for _ in range(300):
+        ids, _ = graph.sample([0], [4], rng, masked=[[0, 0, 1]])
+        assert len(ids) == 5
+        assert 1 not in ids
+        draws.extend(ids[ids != 0])
+    assert abs(np.mean(draws) - 501) < 40
+
+
+def test_direct_csr_position_draw_preserves_original_rng_stream(tmp_path):
+    pytest.importorskip("gestaltdb")
+    edges = np.asarray([[0, 0, i] for i in range(1, 101)] + [[i, 1, 0] for i in range(1, 51)])
+    graph = NeighborhoodGraph(edges, 102, 2, snapshot_path=tmp_path / "csr", compact=True)
+    old_rng = np.random.default_rng(13)
+    new_rng = np.random.default_rng(13)
+    for node in (0, 1, 33, 101):
+        all_edges = graph.incident(node)
+        expected = old_rng.choice(all_edges, 7, replace=False) if len(all_edges) > 7 else all_edges
+        actual, total = graph.draw_incident(node, 7, new_rng)
+        np.testing.assert_array_equal(actual, expected)
+        assert total == len(all_edges)
+    assert old_rng.bit_generator.state == new_rng.bit_generator.state
+
+
+def test_static_cache_scrubs_queries_and_reverse_edges():
+    from yago.inductive_cache import scrub_queries
+    edges = np.asarray([[0, 0, 1], [1, 0, 0], [1, 1, 2]])
+    got = scrub_queries(edges, [np.asarray([[0, 0, 1]])], 3, 2)
+    np.testing.assert_array_equal(got, [[1, 1, 2]])

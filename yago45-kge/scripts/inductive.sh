@@ -17,6 +17,6 @@ PY
 )"
 export LD_LIBRARY_PATH="${CUDA_LIB_PATH}:${LD_LIBRARY_PATH:-}"
 export PYTHONPATH="${ROOT_DIR}:${PYTHONPATH:-}"
-ACTION="${1:?usage: inductive.sh prepare|train|eval|report [args]}"
+ACTION="${1:?usage: inductive.sh prepare|temporal|train|tune|eval|report|cache [args]}"
 shift
 exec "${PYTHON}" -m "yago.inductive_${ACTION}" "$@"

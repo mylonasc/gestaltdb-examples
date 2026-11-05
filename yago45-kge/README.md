@@ -17,6 +17,12 @@ ID-independent relational encoder and ComplEx decoder, also exports useful
 shallow KGE embeddings, and supports full checkpoint resume and contextual GNN
 evaluation on entity-held-out support/query splits. Existing runs remain unchanged.
 
+Actual calibrated 10k results, loss curves and t-SNE are in
+[`experiments/inductive_tiny_mixed_10k/`](experiments/inductive_tiny_mixed_10k/).
+The [full-graph manifest](experiments/inductive_full_manifest.json) records the
+uncapped 119M-fact source and temporal/inductive splits; full-run metrics are
+reported separately, not inferred from the tiny experiment.
+
 ## Result
 
 - `data/yago45/artifacts/yago45_embeddings_200d.npz`:

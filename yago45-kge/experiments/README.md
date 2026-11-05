@@ -25,6 +25,17 @@ contextual/shallow t-SNE, raw sampled rankings, and the complete recipe for the
 calibration fails (also confirmed on validation). This limitation is retained
 explicitly; a separate mixed-negative run addresses both candidate policies.
 
+`inductive_tiny_mixed_10k/` contains the balanced-validation mixed-negative run:
+inductive test MRR `0.7724` (uniform) / `0.5378` (relation-range). The no-message
+ablation gives hard-candidate MRR `0.4471`; paired message-passing gain is
+`+0.0907`, 95% bootstrap interval `[0.0695, 0.1121]`. The final shallow tables
+reach known-entity validation MRR `0.3303`. All use up to 50 filtered negatives.
+
+`inductive_sparse_cpu_control.json` verifies that the full-scale CPU optimizer
+also learns: 32-dimensional shallow ComplEx with native sparse Adagrad reaches
+known-entity validation MRR `0.2262` after 2,000 steps, versus random MRR about
+`0.0886`. This is a small-graph optimizer control, not a full-graph result.
+
 ## Corrected masked KGE
 
 - `masked_negative_control.csv`: equal-budget GestaltDB-engine versus hybrid

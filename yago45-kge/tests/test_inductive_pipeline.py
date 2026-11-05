@@ -1,6 +1,7 @@
 """CPU smoke tests including fresh-process restore and CLI inference."""
 import json
 import os
+import signal
 import subprocess
 import sys
 
@@ -8,6 +9,8 @@ import numpy as np
 import pytest
 
 tf = pytest.importorskip("tensorflow")
+for gpu in tf.config.list_physical_devices("GPU"):
+    tf.config.experimental.set_memory_growth(gpu, True)
 
 from yago.inductive_data import NeighborhoodGraph, split_entities
 from yago.inductive_model import InductiveAutoencoder
@@ -67,6 +70,20 @@ def test_training_resume_and_inductive_cli(tmp_path, shallow_recipe):
     assert result["queries"] == 3
     assert result["context"] == "train + inference support"
     assert 0 < result["mrr"] <= 1
+    if shallow_recipe == "adam":
+        cache = tmp_path / "cache"
+        command = [sys.executable, "-m", "yago.inductive_cache", "--run-dir", str(run),
+                   "--output", str(cache), "--batch-size", "4", "--eval-triples", "2"]
+        invoke(command)
+        manifest = json.loads((cache / "cache.json").read_text())
+        assert manifest["complete"]
+        assert manifest["completed_nodes"] == 16
+        vectors = np.load(cache / "gnn_embeddings.npy", mmap_mode="r")
+        assert vectors.shape == (16, 8)
+        assert vectors.dtype == np.float16
+        assert np.all(np.isfinite(vectors))
+        assert (cache / "cached_link_prediction.json").exists()
+        invoke(command + ["--resume"])
     # Resume must be equivalent to uninterrupted training (same NumPy sampler
     # RNG, optimizer slots and weights; encoder contains no stochastic layers).
     full_run = tmp_path / "full_run"
@@ -77,6 +94,25 @@ def test_training_resume_and_inductive_cli(tmp_path, shallow_recipe):
     for name, _ in tf.train.list_variables(tf.train.latest_checkpoint(str(run / "checkpoints"))):
         if name.startswith(("model/", "optimizer/", "shallow_optimizer/")):
             np.testing.assert_allclose(checkpoint.get_tensor(name), full.get_tensor(name), atol=1e-6)
+    if shallow_recipe == "cpu-adagrad":
+        stopping_run = tmp_path / "stopping_run"
+        stopping = common.copy()
+        stopping[stopping.index(str(run))] = str(stopping_run)
+        process = subprocess.Popen(stopping + ["--steps", "100000", "--no-export"], env=env,
+                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        output = []
+        for line in process.stdout:
+            output.append(line)
+            if line.startswith("step=1 loss="):
+                process.send_signal(signal.SIGTERM)
+                break
+        tail, _ = process.communicate(timeout=120)
+        assert process.returncode == 0, "".join(output) + tail
+        assert "stopped after checkpointing complete step" in tail
+        stopped_checkpoint = tf.train.latest_checkpoint(str(stopping_run / "checkpoints"))
+        stopped_step = int(tf.train.load_checkpoint(stopped_checkpoint).get_tensor("step/.ATTRIBUTES/VARIABLE_VALUE"))
+        assert 1 <= stopped_step < 100000
+        invoke(stopping + ["--steps", str(stopped_step + 1), "--resume", "--no-export"])
 
 
 def test_native_sparse_adagrad_coalesces_duplicates_and_leaves_other_rows_untouched():
@@ -91,6 +127,45 @@ def test_native_sparse_adagrad_coalesces_duplicates_and_leaves_other_rows_untouc
     np.testing.assert_array_equal(table.embeddings.numpy()[0], np.ones(4))
     np.testing.assert_allclose(table.embeddings.numpy()[2], np.full(4, .99), atol=1e-6)
     np.testing.assert_allclose(optimizer.accumulators[0].numpy()[2], np.full(4, 4), atol=1e-6)
+
+
+def test_standalone_export_has_no_entity_id_table_and_reproduces_gnn_scores(tmp_path):
+    from yago.inductive_export import export_encoder
+    model = InductiveAutoencoder(1000, 2, dim=8, base_dim=4, hidden_dim=12, encoder="tf-gnns")
+    context = NeighborhoodGraph(np.asarray([[0, 0, 1], [1, 1, 2]]), 3, 2)
+    _, graph = context.sample([0, 2], [10, 10], np.random.default_rng(1))
+    tensors = {key: tf.convert_to_tensor(value) for key, value in graph.items()}
+    triples = tf.constant([[0, 0, 2]], tf.int32)
+    expected = model.predict_graph(tensors, triples).numpy()
+    export_encoder(model, tmp_path / "gnn")
+    restored = tf.saved_model.load(str(tmp_path / "gnn"))
+    np.testing.assert_allclose(expected, restored.predict_graph(tensors, triples).numpy(), atol=1e-7)
+    states = restored.encode(tensors)
+    cached_score = restored.score_embeddings(tf.gather(states, [0]), tf.constant([0], tf.int32), tf.gather(states, [2]))
+    np.testing.assert_allclose(expected, cached_score.numpy(), atol=1e-7)
+    assert all(tuple(variable.shape) != (1000, 4) for variable in restored.encoder_variables)
+
+
+def test_cpu_table_gather_operations_are_explicitly_cpu_placed():
+    model = InductiveAutoencoder(100, 2, dim=8, base_dim=4, hidden_dim=12, embedding_device="cpu")
+
+    @tf.function(input_signature=[tf.TensorSpec((None, 3), tf.int32)])
+    def scores(triples):
+        return model.shallow_scores(triples)
+
+    graph = scores.get_concrete_function().graph
+    gathers = [operation for operation in graph.get_operations() if operation.type in ("GatherV2", "ResourceGather")]
+    assert gathers
+    assert all("CPU:0" in operation.device for operation in gathers)
+    assert all(operation.type == "ResourceGather" for operation in gathers)
+
+
+def test_legacy_interrupted_step_counter_requires_optimizer_agreement():
+    from yago.inductive_train import reconcile_completed_step
+    assert reconcile_completed_step(5, 5, 5) == 5
+    assert reconcile_completed_step(5, 6, 6) == 6
+    with pytest.raises(ValueError, match="inconsistent checkpoint"):
+        reconcile_completed_step(5, 6, 5)
 
 
 def test_prepare_cli_uses_only_original_training_facts(tmp_path):

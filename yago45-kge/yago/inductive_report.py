@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shutil
 
 import matplotlib
 matplotlib.use("Agg")
@@ -13,7 +14,7 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE, trustworthiness
 import tensorflow as tf
 
-from .inductive_data import GraphKnownObjects, NeighborhoodGraph, mapping_digest, sampled_candidates
+from .inductive_data import GraphKnownObjects, NeighborhoodGraph, file_digest, mapping_digest, sampled_candidates
 from .inductive_eval import evaluate
 from .inductive_model import InductiveAutoencoder
 
@@ -23,7 +24,9 @@ def read_jsonl(path):
 
 
 def summarize_groups(result, data, context):
-    unseen = set(map(int, data["unseen_nodes"]))
+    # Some unselected vertices also lose every training edge when their only
+    # neighbors are held out. They too have no ID row and are genuinely unseen.
+    unseen = range(int(data["num_train_nodes"]), context.num_nodes)
     degree = np.bincount(context.edges[:, [0, 2]].ravel(), minlength=context.num_nodes)
     groups = {}
     for row in result["details"]:
@@ -101,8 +104,8 @@ def plot_embeddings(model, data, context, spec, output, max_nodes):
         group = pairs[pairs[:, 1] == label, 0]
         chosen.extend(rng.choice(group, min(len(group), max_nodes // len(top)), replace=False).tolist())
     chosen = np.asarray(chosen, dtype=np.int64)
-    label_map = dict(pairs.tolist())
-    annotation = np.asarray([label_map[int(node)] for node in chosen])
+    # Do not build a Python dict for tens of millions of full-graph vertices.
+    annotation = pairs[np.searchsorted(pairs[:, 0], chosen), 1]
 
     @tf.function(reduce_retracing=True)
     def encode(graph):
@@ -119,7 +122,7 @@ def plot_embeddings(model, data, context, spec, output, max_nodes):
     projected = PCA(n_components=components, random_state=13).fit_transform(vectors)
     coordinates = TSNE(n_components=2, perplexity=min(30, (len(vectors) - 1) / 3),
                        init="pca", learning_rate="auto", random_state=13).fit_transform(projected)
-    unseen = np.isin(chosen, data["unseen_nodes"])
+    unseen = chosen >= int(data["num_train_nodes"])
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     for i, label in enumerate(top):
         mask = annotation == label
@@ -143,7 +146,7 @@ def plot_embeddings(model, data, context, spec, output, max_nodes):
                         vectors=vectors, coordinates=coordinates, relation=annotation, unseen=unseen)
     # Also show the separately useful shallow embeddings, on known entities only.
     known = chosen < int(data["num_train_nodes"])
-    base = model.entity_table(chosen[known]).numpy()
+    base = model.base_vectors(chosen[known]).numpy()
     base_coords = TSNE(n_components=2, perplexity=min(30, (len(base) - 1) / 3),
                        init="pca", learning_rate="auto", random_state=13).fit_transform(base)
     fig, axis = plt.subplots(figsize=(7, 5))
@@ -175,11 +178,14 @@ def main():
     parser.add_argument("--triples", type=int, default=1000)
     parser.add_argument("--negatives", type=int, default=50)
     parser.add_argument("--tsne-nodes", type=int, default=2000)
+    parser.add_argument("--publish-gnn", action="store_true", help="Copy the small standalone GNN export into the report")
     args = parser.parse_args()
     for gpu in tf.config.list_physical_devices("GPU"):
         tf.config.experimental.set_memory_growth(gpu, True)
     args.output.mkdir(parents=True, exist_ok=True)
     spec = json.loads((args.run_dir / "run.json").read_text())
+    if file_digest(spec["dataset"]) != spec["dataset_digest"]:
+        raise ValueError("dataset content differs from the trained run")
     data = np.load(spec["dataset"], allow_pickle=False)
     if mapping_digest(data) != spec["mapping_digest"]:
         raise ValueError("dataset mapping mismatch")
@@ -188,7 +194,8 @@ def main():
     context = NeighborhoodGraph(edges, len(data["node_ids"]), len(data["relation_ids"]),
                                 snapshot_path=args.run_dir / "snapshots" / "test"
                                 if spec.get("sampler", "").startswith("gestaltdb") else None,
-                                feature_mode=spec.get("feature_mode", "sampled"), compact=spec.get("sampler") == "gestaltdb-csr")
+                                feature_mode=spec.get("feature_mode", "sampled"), compact=spec.get("sampler") == "gestaltdb-csr",
+                                sampling_version=spec.get("sampling_version", 1))
     pool = np.unique(edges[:, [0, 2]])
     known = GraphKnownObjects(context, *(data[key] for key in ("valid", "test", "temporal_valid", "temporal_test") if key in data))
     tf.keras.utils.set_random_seed(spec["seed"])
@@ -202,6 +209,12 @@ def main():
     checkpoint_path = tf.train.latest_checkpoint(str(args.run_dir / "best"))
     if checkpoint_path is None:
         raise ValueError("no validation-selected checkpoint")
+    if args.publish_gnn:
+        source = args.run_dir / "gnn_saved_model"
+        exported = json.loads((source / "metadata.json").read_text())
+        if Path(exported["source_checkpoint"]).name != Path(checkpoint_path).name:
+            raise ValueError("standalone GNN export is stale; rerun the trainer's export with --resume")
+        shutil.copytree(source, args.output / "gnn_saved_model", dirs_exist_ok=True)
     status = tf.train.Checkpoint(model=model).restore(checkpoint_path)
     status.assert_existing_objects_matched()
     status.expect_partial()
@@ -228,7 +241,8 @@ def main():
     if "temporal_test" in data and len(data["temporal_test"]):
         temporal_context = NeighborhoodGraph(data["train"], len(data["node_ids"]), len(data["relation_ids"]),
             snapshot_path=args.run_dir / "snapshots" / "train" if spec.get("sampler", "").startswith("gestaltdb") else None,
-            feature_mode=spec.get("feature_mode", "sampled"), compact=spec.get("sampler") == "gestaltdb-csr")
+            feature_mode=spec.get("feature_mode", "sampled"), compact=spec.get("sampler") == "gestaltdb-csr",
+            sampling_version=spec.get("sampling_version", 1))
         temporal_known = GraphKnownObjects(temporal_context, *(data[key] for key in
             ("valid", "test", "temporal_valid", "temporal_test")))
         for policy in ("uniform", "relation-range"):
@@ -242,12 +256,17 @@ def main():
     status.assert_existing_objects_matched()
     status.expect_partial()
     results["shallow_final_known_valid"] = shallow_evaluate(model, data, args.negatives, args.triples)
+    completed_steps = int(tf.train.load_checkpoint(latest).get_tensor("step/.ATTRIBUTES/VARIABLE_VALUE"))
     summary = dict(run=spec, checkpoint=checkpoint_path, shallow_checkpoint=latest,
                    best=json.loads((args.run_dir / "best.json").read_text()),
                    environment=json.loads((args.run_dir / "environment.json").read_text()),
                    splits={key: len(data[key]) for key in ("train", "valid", "support", "test", "temporal_valid", "temporal_test") if key in data},
                    num_nodes=len(data["node_ids"]), num_train_nodes=int(data["num_train_nodes"]),
-                   num_unseen_nodes=len(data["unseen_nodes"]), num_relations=len(data["relation_ids"]),
+                   num_unseen_nodes=len(data["node_ids"]) - int(data["num_train_nodes"]),
+                   num_sampled_heldout_nodes=len(data["heldout_nodes"] if "heldout_nodes" in data else data["unseen_nodes"]),
+                   num_relations=len(data["relation_ids"]),
+                   completed_steps=completed_steps, positive_seed_draws=completed_steps * spec["batch_size"],
+                   seed_draw_equivalent_epochs=completed_steps * spec["batch_size"] / len(data["train"]),
                    validation_initial=curves[0], validation_final=curves[-1],
                    training_initial=losses[0], training_final=losses[-1],
                    visualization=visualization, results=results)

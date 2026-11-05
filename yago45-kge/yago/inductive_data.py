@@ -9,6 +9,14 @@ from types import SimpleNamespace
 import numpy as np
 
 
+def file_digest(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def mapping_digest(data):
     digest = hashlib.sha256()
     for key in ("node_ids", "relation_ids"):
@@ -76,7 +84,8 @@ def split_entities(edges, num_nodes, fraction, valid_size, test_size, seed):
         raise ValueError("insufficient supported edges for nonempty validation and inductive test splits")
     return dict(train=remap(train), valid=remap(valid), support=remap(support),
                 test=remap(test), node_order=order, num_train_nodes=len(train_nodes),
-                unseen_nodes=inverse[unseen])
+                unseen_nodes=np.arange(len(train_nodes), num_nodes, dtype=np.int64),
+                heldout_nodes=inverse[unseen])
 
 
 class NeighborhoodGraph:
@@ -87,11 +96,13 @@ class NeighborhoodGraph:
     All YAGO nodes currently have the same generic Entity type.
     """
 
-    def __init__(self, edges, num_nodes, num_relations, snapshot_path=None, feature_mode="sampled", compact=False):
+    def __init__(self, edges, num_nodes, num_relations, snapshot_path=None, feature_mode="sampled", compact=False,
+                 sampling_version=2):
         self.edges = np.asarray(edges, dtype=np.int64)
         self.num_nodes = num_nodes
         self.num_relations = num_relations
         self.feature_mode = feature_mode
+        self.sampling_version = sampling_version
         s, r, o = self.edges.T
         if feature_mode == "full":
             from scipy.sparse import coo_matrix
@@ -157,25 +168,68 @@ class NeighborhoodGraph:
             return np.arange(self.offsets[node], self.offsets[node + 1])
         return np.r_[self.snapshot.out.edge_range(node), self.snapshot.in_.edge_range(node) + len(self.edges)]
 
+    def outgoing(self, node):
+        if self.snapshot is not None:
+            return self.snapshot.out.edge_range(node)
+        candidates = self.incident(node)
+        return candidates[self.rel[candidates] < self.num_relations]
+
+    def draw_incident(self, node, count, rng):
+        """Sample CSR positions without copying a hub's entire adjacency."""
+        if self.snapshot is None:
+            candidates = self.incident(node)
+            total = len(candidates)
+            return (rng.choice(candidates, count, replace=False) if total > count else candidates), total
+        out = self.snapshot.out.edge_range(node)
+        incoming = self.snapshot.in_.edge_range(node)
+        total = len(out) + len(incoming)
+        positions = rng.choice(total, count, replace=False) if total > count else np.arange(total)
+        selected = np.empty(len(positions), dtype=np.int64)
+        forward = positions < len(out)
+        selected[forward] = out[positions[forward]]
+        selected[~forward] = incoming[positions[~forward] - len(out)] + len(self.edges)
+        return selected, total
+
     def sample(self, roots, fanouts, rng, masked=()):
         blocked = set()
         for s, r, o in masked:
             # Remove exact and same-relation reverse copies, before expansion.
             blocked.add((int(s), int(r), int(o)))
             blocked.add((int(o), int(r), int(s)))
+        blocked_by_node = {}
+        for s, r, o in blocked:
+            blocked_by_node.setdefault(s, set()).add((r, o))
         nodes = set(map(int, roots))
         frontier = set(nodes)
         chosen = set()
         for fanout in fanouts:
             following = set()
             for node in sorted(frontier):
-                candidates = self.incident(node)
-                if blocked:
-                    candidates = np.asarray([
-                        i for i in candidates
-                        if (node, int(self.rel[i] % self.num_relations), int(self.dst[i])) not in blocked
-                    ], dtype=np.int64)
-                if len(candidates) > fanout:
+                if self.sampling_version == 2:
+                    bad = blocked_by_node.get(node, set())
+                    # Sample a uniform superset before rejecting labels. This
+                    # avoids a Python scan of every edge of million-degree hubs.
+                    # Rejection still precedes expansion and feature creation.
+                    candidates, total = self.draw_incident(node, fanout + 2 * len(bad), rng)
+                    draw_count = len(candidates)
+                    if bad:
+                        candidates = np.asarray([i for i in candidates
+                            if (int(self.rel[i] % self.num_relations), int(self.dst[i])) not in bad], dtype=np.int64)
+                        if len(candidates) < fanout and total > draw_count:
+                            # Fallback for a non-deduplicated caller graph.
+                            candidates = np.asarray([i for i in self.incident(node)
+                                if (int(self.rel[i] % self.num_relations), int(self.dst[i])) not in bad], dtype=np.int64)
+                            if len(candidates) > fanout:
+                                candidates = rng.choice(candidates, fanout, replace=False)
+                    candidates = candidates[:fanout]
+                else:
+                    candidates = self.incident(node)
+                    if blocked:
+                        candidates = np.asarray([
+                            i for i in candidates
+                            if (node, int(self.rel[i] % self.num_relations), int(self.dst[i])) not in blocked
+                        ], dtype=np.int64)
+                if self.sampling_version == 1 and len(candidates) > fanout:
                     candidates = rng.choice(candidates, fanout, replace=False)
                 for i in candidates:
                     chosen.add(int(i))
@@ -200,7 +254,7 @@ class NeighborhoodGraph:
             # Mask statistics as well as message edges: labels must not be
             # recoverable from full-degree features of their endpoints.
             for s, r, o in blocked:
-                incident = self.incident(s)
+                incident = self.outgoing(s)
                 multiplicity = np.sum((self.rel[incident] == r) & (self.dst[incident] == o))
                 if not multiplicity:
                     continue
@@ -244,7 +298,7 @@ class GraphKnownObjects:
             self.cache.move_to_end(key)
             return self.cache[key]
         source, relation = key
-        edges = self.graph.incident(source)
+        edges = self.graph.outgoing(source)
         objects = set(self.graph.dst[edges[self.graph.rel[edges] == relation]].tolist())
         objects.update(self.extra.get(key, ()))
         if len(objects) <= 2048:

@@ -69,7 +69,8 @@ def main():
                 nodes_frame.rename({"node_id": "target", "node_int": "o"}), on="target").join(
                 relations_frame, on="edge_type").select("s", "rel_int", "o", "start_year")
             future = mapped.join(dated.lazy().filter(pl.col("start_year") > args.temporal_train_through),
-                                 on=["s", "rel_int", "o"], how="inner").unique().collect(engine="streaming")
+                                 on=["s", "rel_int", "o"], how="inner").unique().sort(
+                                     "s", "rel_int", "o", "start_year").collect(engine="streaming")
             excluded = future.select("s", "rel_int", "o")
             excluded = pl.concat([excluded, excluded.select(pl.col("o").alias("s"), "rel_int", pl.col("s").alias("o"))]).unique()
             mapped = mapped.join(excluded.lazy(), on=["s", "rel_int", "o"], how="anti")

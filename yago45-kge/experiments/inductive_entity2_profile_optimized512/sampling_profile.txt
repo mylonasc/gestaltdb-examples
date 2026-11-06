@@ -1,0 +1,58 @@
+         237972 function calls (237922 primitive calls) in 0.460 seconds
+
+   Ordered by: cumulative time
+   List reduced from 167 to 50 due to restriction <50>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        3    0.030    0.010    0.460    0.153 inductive_batch.py:7(prepare_batch)
+        3    0.083    0.028    0.389    0.130 inductive_data.py:193(sample)
+        3    0.096    0.032    0.207    0.069 inductive_data.py:280(vectorized_neighborhood)
+       30    0.000    0.000    0.138    0.005 _arraysetops_impl.py:145(unique)
+       30    0.000    0.000    0.137    0.005 _arraysetops_impl.py:350(_unique1d)
+       30    0.125    0.004    0.125    0.004 {built-in method numpy._core._multiarray_umath._unique_hash}
+        9    0.000    0.000    0.028    0.003 _arraysetops_impl.py:1083(union1d)
+    13304    0.003    0.000    0.023    0.000 fromnumeric.py:48(_wrapfunc)
+    10196    0.007    0.000    0.018    0.000 fromnumeric.py:66(_wrapreduction)
+    10534    0.003    0.000    0.018    0.000 fromnumeric.py:1459(searchsorted)
+     7106    0.003    0.000    0.016    0.000 fromnumeric.py:3325(prod)
+        3    0.001    0.000    0.016    0.005 inductive_schedule.py:82(positives)
+    11951    0.015    0.000    0.015    0.000 {method 'reduce' of 'numpy.ufunc' objects}
+     1536    0.008    0.000    0.014    0.000 inductive_data.py:177(draw_incident)
+    10534    0.012    0.000    0.012    0.000 {method 'searchsorted' of 'numpy.ndarray' objects}
+       30    0.011    0.000    0.011    0.000 {method 'sort' of 'numpy.ndarray' objects}
+     2737    0.002    0.000    0.009    0.000 numeric.py:675(flatnonzero)
+     1737    0.001    0.000    0.009    0.000 fromnumeric.py:2474(any)
+     1740    0.001    0.000    0.008    0.000 fromnumeric.py:86(_wrapreduction_any_all)
+        3    0.000    0.000    0.008    0.003 _compressed.py:1011(toarray)
+     2746    0.001    0.000    0.008    0.000 fromnumeric.py:2031(nonzero)
+        3    0.000    0.000    0.007    0.002 _index.py:29(__getitem__)
+        3    0.000    0.000    0.007    0.002 _csr.py:283(_get_arrayXslice)
+        3    0.002    0.001    0.007    0.002 _compressed.py:579(_major_index_fancy)
+     1536    0.000    0.000    0.006    0.000 inductive_data.py:430(__getitem__)
+     2746    0.006    0.000    0.006    0.000 {method 'nonzero' of 'numpy.ndarray' objects}
+        3    0.006    0.002    0.006    0.002 {built-in method scipy.sparse._sparsetools.csr_todense}
+     3072    0.001    0.000    0.006    0.000 fromnumeric.py:2342(sum)
+     1536    0.004    0.000    0.006    0.000 inductive_data.py:415(get)
+        9    0.005    0.001    0.005    0.001 {built-in method numpy.zeros}
+     7680    0.005    0.000    0.005    0.000 adjacency.py:25(edge_range)
+        3    0.004    0.001    0.004    0.001 {built-in method scipy.sparse._sparsetools.csr_row_index}
+     4608    0.001    0.000    0.004    0.000 inductive_data.py:171(outgoing)
+    20440    0.003    0.000    0.003    0.000 {built-in method builtins.getattr}
+        9    0.000    0.000    0.003    0.000 _arraysetops_impl.py:1120(setdiff1d)
+        9    0.001    0.000    0.002    0.000 _arraysetops_impl.py:806(_isin)
+     6252    0.001    0.000    0.002    0.000 {built-in method builtins.all}
+    27357    0.002    0.000    0.002    0.000 {built-in method builtins.len}
+     2737    0.001    0.000    0.002    0.000 fromnumeric.py:1917(ravel)
+      859    0.001    0.000    0.002    0.000 numeric.py:323(full)
+        3    0.000    0.000    0.002    0.001 _base.py:1682(_process_toarray_args)
+        9    0.001    0.000    0.001    0.000 {method 'argsort' of 'numpy.ndarray' objects}
+    11945    0.001    0.000    0.001    0.000 {method 'items' of 'dict' objects}
+       25    0.001    0.000    0.001    0.000 _index_tricks_impl.py:343(__getitem__)
+     6243    0.001    0.000    0.001    0.000 inductive_batch.py:27(<genexpr>)
+       27    0.001    0.000    0.001    0.000 {method 'astype' of 'numpy.ndarray' objects}
+    10534    0.001    0.000    0.001    0.000 fromnumeric.py:1455(_searchsorted_dispatcher)
+       12    0.000    0.000    0.001    0.000 fromnumeric.py:2876(cumsum)
+       12    0.001    0.000    0.001    0.000 {method 'cumsum' of 'numpy.ndarray' objects}
+     6010    0.000    0.000    0.001    0.000 {built-in method builtins.isinstance}
+
+

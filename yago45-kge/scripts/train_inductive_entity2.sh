@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 exec bash "${ROOT_DIR}/scripts/inductive.sh" train \
   --dataset "${ROOT_DIR}/../data/yago45_full/inductive.npz" \
   --run-dir "${ROOT_DIR}/../data/yago45_full/inductive_full_entity2_h128_mp3" \
-  --entity-passes 2 --batch-size 128 --negatives 8 \
+  --entity-passes 2 --batch-size 512 --negatives 8 --sampling-version 3 \
   --hidden-dim 128 --dim 200 --base-dim 32 --fanouts 8 4 2 --residual \
   --learning-rate 0.001 --temperature 0.1 \
   --negative-policy mixed --validation-policy both --validation-split temporal_valid \

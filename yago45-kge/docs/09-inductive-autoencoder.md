@@ -260,7 +260,7 @@ supervision or training context. A seeded affine bijection visits each training
 ID exactly once per pass without storing a full permutation. This traversal is
 bijective, not a uniformly random permutation.
 
-For batch size 128, two passes require **679,124 updates**, with short final
+For the original batch size 128, two passes require **679,124 updates**, with short final
 batches (no padding/repeated anchors). This guarantees **86,927,656 supervised
 anchor appearances**. An entity may occur more often as another anchor's
 neighbor/positive endpoint/negative. It is an entity-balanced objective, not two
@@ -269,6 +269,7 @@ on every appearance. The trainer fails upfront on isolated training IDs or a
 training context containing held-out IDs.
 
 ```bash
+# Original launch recipe; see the performance migration below for current resume.
 bash scripts/inductive.sh train \
   --dataset ../data/yago45_full/inductive.npz \
   --run-dir ../data/yago45_full/inductive_full_entity2_h128_mp3 \
@@ -302,6 +303,46 @@ as two-pass weights. Use `inductive_eval --checkpoint latest` (also with
 `--saved-model`) for the completed coverage artifact. Existing 20k results,
 weights, caches and Hugging Face preparation cards are historical and unchanged.
 New large caches require additional disk headroom; the old cache is not deleted.
+
+### Throughput profiling and explicit performance migrations
+
+`--profile-batches 128 256 512 1024 --profile-output /path/to/profile --resume`
+benchmarks real graph preparation and synchronized model/optimizer updates.
+`--profile-sampling-version 3` tests the vectorized sampler without changing
+the saved training recipe. Profiling does **not** save weights, advance coverage,
+or modify validation history. Each size has warm-up batches; JSON stage timings,
+TensorFlow allocator peaks, a replay-update control and cProfile CPU evidence
+are persisted. Use one size per process for strictly isolated checkpoint-based
+comparisons; a multi-size sweep keeps ephemeral in-memory updates between sizes
+and is not a model-quality comparison. Repeatedly restoring giant CPU tables in
+one process can retain allocator memory and exhaust host RAM; profiling avoids
+that repeated restore. TensorFlow GPU allocation is not whole-system VRAM.
+
+The sampler uses zero-copy ndarray views over its mmap-backed CSR files, avoiding
+NumPy memmap subclass overhead on scalar reads. Sampling v3 vectorizes uniform
+without-replacement neighbor draws across a frontier, filters supervised facts
+before expansion, and preserves inverse-message/feature masking. Packed int64
+edge keys remove the costly structured-row `np.unique(axis=0)` sort, preserving
+the exact lexicographic message order. The view/key optimizations preserve RNG
+behavior; v3 intentionally changes the RNG stream but not the sampling contract.
+
+A batch-size change must **not** reinterpret the old step counter as
+`completed_steps × new_batch_size`. For an explicit migration, resume the old
+recipe with `--resume-batch-size 512 --sampling-version 3 --upgrade-sampler`.
+`coverage_phases` records the old batch size, migration optimizer step, and exact
+next anchor draw. The unchanged affine per-pass sequence resumes at that draw;
+no entity is skipped or repeated due to rebatching. A `performance_migration_*.json`
+audit preserves both recipes and the source checkpoint. Future resumes use the
+new batch size/sampler. Optimizer state and learning rates are retained, but
+larger averaged batches mean fewer future optimizer updates—not bitwise
+equivalence to continuing the original small-batch run.
+
+For the running full experiment, the recorded transition is at step 20,439:
+2,616,192 anchors completed at batch 128, followed by batch 512. The two-pass
+target remains **86,927,656 anchors**, now ending at **185,111 total optimizer
+updates** instead of 679,124. Held-out entities remain excluded.
+The updated `scripts/train_inductive_entity2.sh` uses batch 512 and sampler v3;
+resume the migrated run with `bash scripts/train_inductive_entity2.sh --resume`.
 
 The [executed full-graph notebook](../notebooks/02_inductive_full_results.ipynb)
 embeds actual t-SNE and loss figures and can be rerun using committed evidence

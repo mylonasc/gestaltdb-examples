@@ -11,7 +11,10 @@ are intentionally excluded from Git.
 two-pass coverage target: every one of 43,463,828 training entities is a
 supervised endpoint at least twice, with held-out entities excluded. The new
 GNN uses hidden width 128, three residual message steps and 200-dimensional
-outputs. This requires 679,124 updates, not 20k; no completed results for this
+outputs. The initial batch-128 plan required 679,124 updates, not 20k.
+After profiling, the [coverage-preserving throughput migration](inductive_entity2_throughput.md)
+uses batch 512 and vectorized sampling, targeting 185,111 total updates while
+preserving the same two-pass anchor sequence. No completed results for this
 larger run are claimed here. Recipe: `bash scripts/train_inductive_entity2.sh`.
 Previous results below remain valid historical **20k-budget** results, not
 evidence of full training-entity coverage.

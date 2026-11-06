@@ -14,6 +14,7 @@ import tensorflow as tf
 from .inductive_data import GraphKnownObjects, NeighborhoodGraph, file_digest, mapping_digest
 from .inductive_eval import evaluate
 from .inductive_model import InductiveAutoencoder, infonce
+from .inductive_batch import prepare_batch
 
 
 def reconcile_completed_step(completed, *optimizer_steps):
@@ -36,6 +37,10 @@ def main():
                         help="Default: latest for entity coverage, best for random training")
     parser.add_argument("--residual", action=argparse.BooleanOptionalAction, default=None,
                         help="Per-message-step residual connections (tf-gnns already defaults to residual)")
+    parser.add_argument("--resume-batch-size", type=int, default=None,
+                        help="Explicit coverage-preserving batch-size migration at the latest checkpoint")
+    parser.add_argument("--upgrade-sampler", action="store_true",
+                        help="Explicitly allow a checkpointed v2-to-v3 sampler upgrade; records provenance")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--negatives", type=int, default=16)
@@ -54,7 +59,7 @@ def main():
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument("--encoder", choices=["relational", "tf-gnns"], default="tf-gnns")
     parser.add_argument("--sampler", choices=["numpy", "gestaltdb", "gestaltdb-csr"], default="gestaltdb")
-    parser.add_argument("--sampling-version", choices=[1, 2], type=int, default=None)
+    parser.add_argument("--sampling-version", choices=[1, 2, 3], type=int, default=None)
     parser.add_argument("--require-gpu", action="store_true")
     parser.add_argument("--negative-policy", choices=["uniform", "mixed", "relation-range"], default="uniform")
     parser.add_argument("--validation-policy", choices=["uniform", "relation-range", "both"], default="uniform")
@@ -64,7 +69,42 @@ def main():
     parser.add_argument("--shallow-learning-rate", type=float, default=None)
     parser.add_argument("--validation-split", choices=["valid", "temporal_valid"], default="valid")
     parser.add_argument("--no-export", action="store_true")
+    parser.add_argument("--profile-batches", type=int, nargs="+", default=None,
+                        help="Resume-only ephemeral batch benchmarks; never save updates or advance coverage")
+    parser.add_argument("--profile-updates", type=int, default=20)
+    parser.add_argument("--profile-warmup", type=int, default=3)
+    parser.add_argument("--profile-output", type=Path, default=None)
+    parser.add_argument("--profile-sampling-version", choices=[2, 3], type=int, default=None,
+                        help="Benchmark a sampler without changing the run recipe")
     args = parser.parse_args()
+    if args.profile_batches is not None:
+        if (not args.resume or args.profile_output is None or min(args.profile_batches) < 1
+                or args.profile_updates < 1 or args.profile_warmup < 1):
+            parser.error("profiling requires --resume, --profile-output and positive batch sizes/update counts")
+    elif args.profile_sampling_version is not None:
+        parser.error("--profile-sampling-version requires --profile-batches")
+    if (args.resume_batch_size is not None or args.upgrade_sampler) and (not args.resume or args.profile_batches):
+        parser.error("performance migration requires --resume and cannot be combined with profiling")
+    phases = None
+    migration_step = None
+    if args.resume and (args.run_dir / "run.json").exists():
+        prior = json.loads((args.run_dir / "run.json").read_text())
+        phases = prior.get("coverage_phases")
+        if args.resume_batch_size is not None:
+            if args.resume_batch_size <= 0 or not args.entity_passes or not prior.get("entity_passes"):
+                parser.error("batch migration requires positive batch size and an entity-coverage run")
+            if args.resume_batch_size != prior["batch_size"]:
+                from .inductive_schedule import EntityCoverageSchedule
+                source = tf.train.latest_checkpoint(str(args.run_dir / "checkpoints"))
+                if source is None:
+                    parser.error("batch migration needs a complete checkpoint")
+                migration_step = int(Path(source).name.rsplit("-", 1)[1])
+                old_schedule = EntityCoverageSchedule(prior["model"]["num_train_nodes"], prior["batch_size"],
+                    prior["entity_passes"], prior["seed"], phases=phases)
+                draws = old_schedule.progress(migration_step)["supervised_anchor_draws"]
+                phases = [phase for phase in old_schedule.phases if phase["start_step"] < migration_step] + [dict(start_step=migration_step,
+                    start_anchor_draws=draws, batch_size=args.resume_batch_size)]
+            args.batch_size = args.resume_batch_size
     if args.entity_passes < 0:
         parser.error("--entity-passes cannot be negative")
     export_checkpoint = args.export_checkpoint or ("latest" if args.entity_passes else "best")
@@ -91,7 +131,7 @@ def main():
     schedule = None
     if args.entity_passes:
         from .inductive_schedule import EntityCoverageSchedule
-        schedule = EntityCoverageSchedule(num_train_nodes, args.batch_size, args.entity_passes, args.seed)
+        schedule = EntityCoverageSchedule(num_train_nodes, args.batch_size, args.entity_passes, args.seed, phases=phases)
         args.steps = schedule.total_steps
         print(f"entity coverage: {args.entity_passes} passes × {num_train_nodes:,} entities; "
               f"{args.steps:,} updates (overrides --steps); export={export_checkpoint}", flush=True)
@@ -120,14 +160,17 @@ def main():
                 shallow_weight=args.shallow_weight, seed=args.seed,
                 features=f"log1p masked {args.feature_mode} directional relation counts + generic Entity constant",
                 encoder=f"ID-independent {args.encoder} mean message passing",
-                 decoder="ComplEx", representation="normalized contextual GNN states + separate shallow tables")
+                decoder="ComplEx", representation="normalized contextual GNN states + separate shallow tables")
     if args.residual is not None:
         spec["model"]["residual"] = args.residual
     if schedule is not None or args.export_checkpoint is not None:
         spec.update(entity_passes=args.entity_passes, export_checkpoint=export_checkpoint,
                     positive_schedule="entity-affine-v1" if schedule else "random-facts")
+    if phases is not None:
+        spec["coverage_phases"] = phases
     args.run_dir.mkdir(parents=True, exist_ok=True)
     config_path = args.run_dir / "run.json"
+    migration = None
     if args.resume:
         if not config_path.exists():
             parser.error("resume requires run.json and a checkpoint")
@@ -143,13 +186,23 @@ def main():
         saved.setdefault("validation_queries", args.eval_triples)
         saved.setdefault("sampling_version", 1)
         if saved != spec:
-            parser.error("resume configuration/dataset differs; reuse the original training arguments")
+            allowed = dict(saved)
+            if args.resume_batch_size is not None:
+                allowed["batch_size"] = args.batch_size
+                if phases is not None:
+                    allowed["coverage_phases"] = phases
+            if args.upgrade_sampler and saved["sampling_version"] == 2 and sampling_version == 3:
+                allowed["sampling_version"] = 3
+            if allowed != spec:
+                parser.error("resume configuration/dataset differs; reuse the original training arguments")
+            migration = dict(previous_recipe=saved, new_recipe=spec)
     elif config_path.exists() or any(args.run_dir.iterdir()):
         parser.error("run directory is not empty; use --resume or a new directory")
     else:
         config_path.write_text(json.dumps(spec, indent=2))
     versions = {name: importlib.metadata.version(name) for name in ("tensorflow", "keras", "gestaltdb", "tf_gnns", "numpy")}
-    (args.run_dir / "environment.json").write_text(json.dumps(dict(versions=versions, gpus=[str(g) for g in gpus]), indent=2))
+    if args.profile_batches is None:
+        (args.run_dir / "environment.json").write_text(json.dumps(dict(versions=versions, gpus=[str(g) for g in gpus]), indent=2))
 
     tf.keras.utils.set_random_seed(args.seed)
     rng = np.random.default_rng(args.seed)
@@ -195,6 +248,16 @@ def main():
             print(f"reconciled legacy interrupted step counter to completed optimizer step {restored_steps}", flush=True)
             step.assign(restored_steps)
         rng.bit_generator.state = json.loads(rng_state.numpy().decode())
+        if migration is not None:
+            if migration_step is not None and int(step.numpy()) != migration_step:
+                parser.error("migration step differs from completed optimizer step")
+            migration.update(checkpoint=manager.latest_checkpoint, completed_step=int(step.numpy()),
+                             reason="explicit throughput migration; preserve optimizer weights and all scheduled entity anchors")
+            (args.run_dir / f"performance_migration_{int(step.numpy())}.json").write_text(json.dumps(migration, indent=2))
+            temporary = config_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(spec, indent=2))
+            temporary.replace(config_path)
+            print(f"recorded performance migration at complete step {int(step.numpy())}", flush=True)
         print(f"resumed {manager.latest_checkpoint} at step {int(step.numpy())}", flush=True)
     start = int(step.numpy())
     if start > args.steps:
@@ -209,12 +272,15 @@ def main():
                 continue  # tolerate an interrupted final append
             if row["step"] <= start:
                 curves.append(row)
-    curves_path.write_text("".join(json.dumps(row) + "\n" for row in curves))
+    if args.profile_batches is None:
+        curves_path.write_text("".join(json.dumps(row) + "\n" for row in curves))
 
     context = NeighborhoodGraph(train, num_nodes, num_relations,
                                 snapshot_path=args.run_dir / "snapshots" / "train" if args.sampler.startswith("gestaltdb") else None,
                                 feature_mode=args.feature_mode, compact=args.sampler == "gestaltdb-csr",
                                 sampling_version=sampling_version)
+    if args.profile_sampling_version is not None:
+        context.sampling_version = args.profile_sampling_version
     if schedule is not None:
         schedule.validate_graph(context)
     # Training negatives are filtered against TRAIN ONLY; no test/support access.
@@ -249,15 +315,27 @@ def main():
             optimizer.apply_gradients(pairs)
         return loss, gnn_loss, base_loss
 
-    def save():
-        rng_state.assign(json.dumps(rng.bit_generator.state))
-        path = manager.save(checkpoint_number=int(step.numpy()))
+    if args.profile_batches is not None:
+        from .inductive_profile import benchmark_batches
+        benchmark_batches(args, spec, context, training_known, relation_pools, update,
+                          checkpoint, manager.latest_checkpoint, start)
+        return
+
+    def save_coverage(path):
         if schedule is not None:
             progress = schedule.progress(int(step.numpy()))
             progress["checkpoint"] = path
             temporary = args.run_dir / "coverage.tmp"
             temporary.write_text(json.dumps(progress, indent=2))
             temporary.replace(args.run_dir / "coverage.json")
+
+    if migration is not None:
+        save_coverage(manager.latest_checkpoint)
+
+    def save():
+        rng_state.assign(json.dumps(rng.bit_generator.state))
+        path = manager.save(checkpoint_number=int(step.numpy()))
+        save_coverage(path)
         print(f"saved {path}", flush=True)
 
     def validate(current, losses=None):
@@ -318,45 +396,13 @@ def main():
             if stop_requested:
                 save()
                 break
-            if schedule is None:
-                positive = train[rng.integers(len(train), size=args.batch_size)]
-            else:
-                anchors, positive = schedule.positives(context, current - 1, rng)
-                if not np.all((positive[:, 0] == anchors) | (positive[:, 2] == anchors)):
-                    raise AssertionError("supervised positives do not contain scheduled entities")
-            negative = np.repeat(positive[:, None, :], args.negatives, axis=1)
-            # Filtered tail corruptions; bounded retries fail loudly rather than
-            # quietly labeling a known fact as false in dense relation ranges.
-            for i, (s, r, _) in enumerate(positive):
-                forbidden = training_known[(int(s), int(r))]
-                if len(forbidden) >= num_train_nodes:
-                    raise ValueError("query has no valid negative tails")
-                for j in range(args.negatives):
-                    use_range = (args.negative_policy == "relation-range"
-                                 or (args.negative_policy == "mixed" and rng.random() < 0.5))
-                    pool = relation_pools[int(r)]
-                    # A singleton/saturated range has no false tail. Fall back
-                    # to a global corruption instead of labeling true facts false.
-                    if use_range and all(int(x) in forbidden for x in pool):
-                        use_range = False
-                    for _ in range(10000):
-                        candidate = int(rng.choice(pool)) if use_range else int(rng.integers(num_train_nodes))
-                        if candidate not in forbidden:
-                            negative[i, j, 2] = candidate
-                            break
-                    else:
-                        raise ValueError("negative rejection limit reached")
-            roots = np.unique(np.r_[positive[:, [0, 2]].ravel(), negative[..., [0, 2]].ravel()])
-            ids, graph = context.sample(roots, args.fanouts, rng, masked=positive)
-
-            def localize(triples):
-                local = triples.copy()
-                local[..., 0] = np.searchsorted(ids, triples[..., 0])
-                local[..., 2] = np.searchsorted(ids, triples[..., 2])
-                return local.astype(np.int32)
-
+            arrays, batch_timings = prepare_batch(context, training_known, relation_pools, num_train_nodes,
+                rng=rng, batch_size=args.batch_size, negatives=args.negatives,
+                negative_policy=args.negative_policy, fanouts=args.fanouts,
+                schedule=schedule, completed_steps=current - 1)
+            graph, positive_local, negative_local, positive, negative = arrays
             losses = update({k: tf.convert_to_tensor(v) for k, v in graph.items()},
-                            localize(positive), localize(negative), positive.astype(np.int32), negative.astype(np.int32))
+                            positive_local, negative_local, positive, negative)
             step.assign(current)
             if current % 50 == 0 or current == start + 1:
                 elapsed = time.perf_counter() - t0

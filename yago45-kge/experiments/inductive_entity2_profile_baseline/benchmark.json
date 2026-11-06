@@ -1,0 +1,68 @@
+{
+  "run_directory": "/home/charilaos/Workspace/gestaltdb-examples/yago45-kge/../data/yago45_full/inductive_full_entity2_h128_mp3",
+  "checkpoint": "/home/charilaos/Workspace/gestaltdb-examples/yago45-kge/../data/yago45_full/inductive_full_entity2_h128_mp3/checkpoints/ckpt-20439",
+  "model": {
+    "num_train_nodes": 43463828,
+    "num_relations": 63,
+    "dim": 200,
+    "base_dim": 32,
+    "embedding_device": "cpu",
+    "hidden_dim": 128,
+    "layers": 3,
+    "encoder": "tf-gnns",
+    "residual": true
+  },
+  "fanouts": [
+    8,
+    4,
+    2
+  ],
+  "negatives": 8,
+  "original_batch_size": 128,
+  "completed_training_steps": 20439,
+  "warmup": 3,
+  "measured_batches": 20,
+  "note": "Ephemeral optimizer updates; same checkpoint before each size; run checkpoint and coverage are untouched.",
+  "batches": [
+    {
+      "positive_seconds": 0.0013077413517748938,
+      "negatives_seconds": 0.003235422456054948,
+      "neighborhood_seconds": 0.17228976159822196,
+      "localization_seconds": 5.8815543889068066e-05,
+      "tensor_conversion_seconds": 0.0019413507427088917,
+      "update_seconds": 0.014696682800422422,
+      "total_seconds": 0.1935404288029531,
+      "entities": 128.0,
+      "nodes": 18378.9,
+      "edges": 48119.1,
+      "loss": 2.4679451107978823,
+      "batch_size": 128,
+      "entities_per_second": 661.3605270572126,
+      "gpu_memory": {
+        "current": 28509440,
+        "peak": 931195136
+      },
+      "replay_update_seconds": 0.013436449450091459
+    },
+    {
+      "positive_seconds": 0.003855182489496656,
+      "negatives_seconds": 0.006932473354390822,
+      "neighborhood_seconds": 0.3418440142442705,
+      "localization_seconds": 0.00010159674857277424,
+      "tensor_conversion_seconds": 0.004744552847114392,
+      "update_seconds": 0.022485245604184457,
+      "total_seconds": 0.3800094209465897,
+      "entities": 256.0,
+      "nodes": 33102.4,
+      "edges": 88879.3,
+      "loss": 2.4583628296852114,
+      "batch_size": 256,
+      "entities_per_second": 673.667508985207,
+      "gpu_memory": {
+        "current": 45027072,
+        "peak": 1724689920
+      },
+      "replay_update_seconds": 0.01986652429914102
+    }
+  ]
+}

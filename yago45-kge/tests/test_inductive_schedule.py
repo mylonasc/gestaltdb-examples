@@ -54,3 +54,23 @@ def test_coverage_rejects_heldout_context_and_untrainable_ids():
         schedule.validate_graph(NeighborhoodGraph(np.asarray([[0, 0, 3]]), 4, 1))
     with pytest.raises(ValueError, match="isolated"):
         schedule.validate_graph(NeighborhoodGraph(np.asarray([[0, 0, 1]]), 3, 1))
+
+
+@pytest.mark.parametrize("new_batch", [1, 4, 16])
+def test_batch_size_migration_preserves_exact_anchor_sequence_and_progress(new_batch):
+    original = EntityCoverageSchedule(17, 3, 2, 13)
+    step = 3
+    draws = original.progress(step)["supervised_anchor_draws"]
+    phases = [*original.phases, dict(start_step=step, start_anchor_draws=draws, batch_size=new_batch)]
+    migrated = EntityCoverageSchedule(17, new_batch, 2, 13, phases=phases)
+    before = np.concatenate([original.anchors(i) for i in range(step)])
+    after = np.concatenate([migrated.anchors(i) for i in range(step, migrated.total_steps)])
+    expected = np.concatenate([original.anchors(i) for i in range(original.total_steps)])
+    np.testing.assert_array_equal(np.r_[before, after], expected)
+    assert migrated.progress(migrated.total_steps)["guaranteed_minimum_supervised_appearances_per_entity"] == 2
+    assert migrated.draws_at(step) == draws
+    for i in range(step):
+        assert migrated.draws_at(i) == original.draws_at(i)
+    with pytest.raises(ValueError, match="skips or repeats"):
+        EntityCoverageSchedule(17, new_batch, 2, 13,
+            phases=[*original.phases, dict(start_step=step, start_anchor_draws=draws + 1, batch_size=new_batch)])

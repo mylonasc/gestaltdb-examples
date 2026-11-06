@@ -144,8 +144,8 @@ class NeighborhoodGraph:
                 adjacencies = {}
                 for direction in ("out", "in"):
                     adjacencies[direction] = CSRAdjacency(
-                        np.load(path / f"{direction}_indptr.npy", mmap_mode="r"),
-                        np.load(path / f"{direction}_edge_indices.npy", mmap_mode="r"))
+                        np.asarray(np.load(path / f"{direction}_indptr.npy", mmap_mode="r")),
+                        np.asarray(np.load(path / f"{direction}_edge_indices.npy", mmap_mode="r")))
                 self.snapshot = SimpleNamespace(out=adjacencies["out"], in_=adjacencies["in"])
                 return
             from gestaltdb.sampling import SamplerSnapshot
@@ -202,7 +202,9 @@ class NeighborhoodGraph:
         nodes = set(map(int, roots))
         frontier = set(nodes)
         chosen = set()
-        for fanout in fanouts:
+        if self.sampling_version == 3:
+            nodes, chosen = self.vectorized_neighborhood(roots, fanouts, rng, blocked_by_node)
+        for fanout in (() if self.sampling_version == 3 else fanouts):
             following = set()
             for node in sorted(frontier):
                 if self.sampling_version == 2:
@@ -236,8 +238,8 @@ class NeighborhoodGraph:
                     following.add(int(self.dst[i]))
             frontier = following - nodes
             nodes.update(following)
-        ids = np.asarray(sorted(nodes), dtype=np.int64)
-        indices = np.asarray(sorted(chosen), dtype=np.int64)
+        ids = np.asarray(nodes if self.sampling_version == 3 else sorted(nodes), dtype=np.int64)
+        indices = np.asarray(chosen if self.sampling_version == 3 else sorted(chosen), dtype=np.int64)
         s = np.searchsorted(ids, self.src[indices])
         o = np.searchsorted(ids, self.dst[indices])
         r = self.rel[indices]
@@ -245,8 +247,15 @@ class NeighborhoodGraph:
         senders = np.r_[s, o]
         receivers = np.r_[o, s]
         relations = np.r_[r, (r + self.num_relations) % (2 * self.num_relations)]
-        pairs = np.unique(np.stack([senders, relations, receivers], axis=1), axis=0)
-        senders, relations, receivers = pairs.T
+        # A packed int64 key preserves exact lexicographic edge order without
+        # NumPy's expensive axis=0 structured-array row sort.
+        if len(ids) ** 2 * (2 * self.num_relations) >= np.iinfo(np.int64).max:
+            raise ValueError("sampled edge key exceeds int64 range")
+        keys = np.unique((senders * (2 * self.num_relations) + relations) * len(ids) + receivers)
+        receivers = keys % len(ids)
+        directional = keys // len(ids)
+        relations = directional % (2 * self.num_relations)
+        senders = directional // (2 * self.num_relations)
         features = np.zeros((len(ids), 2 * self.num_relations + 1), dtype=np.float32)
         features[:, -1] = 1.0  # shared generic Entity type / isolated-node feature
         if self.feature_mode == "full":
@@ -267,6 +276,97 @@ class NeighborhoodGraph:
         features[:, :-1] = np.log1p(features[:, :-1])
         return ids, dict(features=features, senders=senders.astype(np.int32),
                          receivers=receivers.astype(np.int32), relations=relations.astype(np.int32))
+
+    def vectorized_neighborhood(self, roots, fanouts, rng, blocked_by_node):
+        """Uniform CSR draws without replacement, vectorized across each frontier.
+
+        Version 3 preserves the distribution/masking contract, not the v2 RNG
+        stream. No per-node adjacency copies or Python loop for unmasked draws.
+        """
+        nodes = np.unique(roots)
+        frontier = nodes
+        chosen = []
+        for fanout in fanouts:
+            if not len(frontier):
+                break
+            if self.snapshot is None:
+                out_start = self.offsets[frontier]
+                out_degree = self.offsets[frontier + 1] - out_start
+                in_start = np.zeros(len(frontier), dtype=np.int64)
+                in_degree = np.zeros(len(frontier), dtype=np.int64)
+            else:
+                out_start = self.snapshot.out.indptr[frontier]
+                out_degree = self.snapshot.out.indptr[frontier + 1] - out_start
+                in_start = self.snapshot.in_.indptr[frontier]
+                in_degree = self.snapshot.in_.indptr[frontier + 1] - in_start
+            degree = out_degree + in_degree
+            requested = np.full(len(frontier), fanout, dtype=np.int64)
+            masked_rows = []
+            for node, bad in blocked_by_node.items():
+                row = np.searchsorted(frontier, node)
+                if row < len(frontier) and frontier[row] == node:
+                    requested[row] += 2 * len(bad)
+                    masked_rows.append(int(row))
+            take = np.minimum(degree, requested)
+            positions = np.full((len(frontier), int(take.max(initial=0))), -1, dtype=np.int64)
+            random_rows = degree > requested
+            for slot in range(positions.shape[1]):
+                rows = np.flatnonzero(take > slot)
+                positions[rows, slot] = slot  # enumerate low-degree rows, v2 semantics
+                random = rows[random_rows[rows]]
+                if len(random):
+                    draws = rng.integers(degree[random])
+                    if slot:
+                        duplicates = np.any(positions[random, :slot] == draws[:, None], axis=1)
+                        while np.any(duplicates):
+                            draws[duplicates] = rng.integers(degree[random[duplicates]])
+                            duplicates = np.any(positions[random, :slot] == draws[:, None], axis=1)
+                    positions[random, slot] = draws
+            rows, slots = np.nonzero(positions >= 0)
+            draws = positions[rows, slots]
+            if self.snapshot is None:
+                candidates = out_start[rows] + draws
+            else:
+                forward = draws < out_degree[rows]
+                candidates = np.empty(len(draws), dtype=np.int64)
+                candidates[forward] = self.snapshot.out.edge_indices[out_start[rows[forward]] + draws[forward]]
+                candidates[~forward] = self.snapshot.in_.edge_indices[
+                    in_start[rows[~forward]] + draws[~forward] - out_degree[rows[~forward]]] + len(self.edges)
+            # Only masked rows need Python membership checks (typically roots),
+            # rather than every edge/node in each multi-hop frontier.
+            allowed = np.ones(len(candidates), dtype=bool)
+            for row in masked_rows:
+                indices = np.flatnonzero(rows == row)
+                bad = blocked_by_node[int(frontier[row])]
+                allowed[indices] = [(int(self.rel[i] % self.num_relations), int(self.dst[i])) not in bad
+                                    for i in candidates[indices]]
+            rows, candidates = rows[allowed], candidates[allowed]
+            counts = np.bincount(rows, minlength=len(frontier))
+            within_row = np.arange(len(rows)) - np.repeat(np.cumsum(counts) - counts, counts)
+            selected = candidates[within_row < fanout]
+            # If the oversample enumerated a small adjacency, masking can leave
+            # more than fanout valid edges. Randomly trim those rows rather than
+            # taking their first CSR positions (which would bias the sample).
+            for row in np.flatnonzero((degree <= requested) & (counts > fanout)):
+                alternatives = candidates[rows == row]
+                node = int(frontier[row])
+                selected = np.r_[selected[self.src[selected] != node], rng.choice(alternatives, fanout, replace=False)]
+            # Rare duplicate-edge fallback, matching the v2 rejection contract.
+            for row in masked_rows:
+                if counts[row] < fanout and degree[row] > take[row]:
+                    node = int(frontier[row])
+                    bad = blocked_by_node[node]
+                    original = self.incident(node)
+                    alternatives = np.asarray([i for i in original
+                        if (int(self.rel[i] % self.num_relations), int(self.dst[i])) not in bad], dtype=np.int64)
+                    if len(alternatives) > fanout:
+                        alternatives = rng.choice(alternatives, fanout, replace=False)
+                    selected = np.r_[selected[self.src[selected] != node], alternatives]
+            chosen.append(selected)
+            following = np.setdiff1d(np.unique(self.dst[selected]), nodes, assume_unique=True)
+            nodes = np.union1d(nodes, following)
+            frontier = following
+        return nodes, np.unique(np.concatenate(chosen)) if chosen else np.empty(0, dtype=np.int64)
 
 
 def sampled_candidates(query, pool, negatives, known, rng):

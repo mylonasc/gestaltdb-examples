@@ -352,7 +352,7 @@ def main():
     if spec.get("entity_passes", 0):
         from .inductive_schedule import EntityCoverageSchedule
         schedule = EntityCoverageSchedule(int(data["num_train_nodes"]), spec["batch_size"],
-                                          spec["entity_passes"], spec["seed"])
+                                          spec["entity_passes"], spec["seed"], phases=spec.get("coverage_phases"))
         coverage = schedule.progress(completed_steps)
         selected_steps = completed_steps if checkpoint_policy == "latest" else int(
             json.loads((args.run_dir / "best.json").read_text())["step"])

@@ -218,6 +218,21 @@ def test_three_step_residual_entity_coverage_run_and_signal_resume(tmp_path):
     assert summary["coverage"]["complete"]
     assert summary["selected_model_coverage"]["guaranteed_minimum_supervised_appearances_per_entity"] == 2
     assert summary["positive_seed_draws"] == 2 * int(data["num_train_nodes"])
+    # Profiling can change in-memory weights but must not advance the actual
+    # training checkpoint, coverage proof, environment or validation history.
+    before_files = {name: (run / name).read_bytes() for name in
+                    ("coverage.json", "curves.jsonl", "environment.json", "run.json", "checkpoints/checkpoint")}
+    profiling = tmp_path / "profile"
+    result = subprocess.run(command + ["--resume", "--profile-batches", "2", "4",
+                            "--profile-updates", "1", "--profile-warmup", "1",
+                            "--profile-output", str(profiling)],
+                            env=env, text=True, capture_output=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    for name, content in before_files.items():
+        assert (run / name).read_bytes() == content
+    benchmark = json.loads((profiling / "benchmark.json").read_text())
+    assert [row["batch_size"] for row in benchmark["batches"]] == [2, 4]
+    assert all(row["entities_per_second"] > 0 for row in benchmark["batches"])
     spec = json.loads((run / "run.json").read_text())
     model = InductiveAutoencoder(**spec["model"])
     assert model.gnn.core_steps == 3 and model.gnn.is_residual
@@ -233,6 +248,29 @@ def test_three_step_residual_entity_coverage_run_and_signal_resume(tmp_path):
     for name, _ in tf.train.list_variables(resumed_path):
         if name.startswith(("model/", "optimizer/", "shallow_optimizer/")):
             np.testing.assert_allclose(resumed.get_tensor(name), uninterrupted.get_tensor(name), atol=1e-6)
+    # Explicit performance migration preserves the next anchor cursor even
+    # though larger optimizer batches and sampler v3 change the future RNG.
+    migrated_run = tmp_path / "migrated_run"
+    migrating = command.copy()
+    migrating[migrating.index(str(run))] = str(migrated_run)
+    process = subprocess.Popen(migrating, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    output = []
+    for line in process.stdout:
+        output.append(line)
+        if line.startswith("step=1 loss="):
+            process.send_signal(signal.SIGTERM)
+            break
+    tail, _ = process.communicate(timeout=120)
+    assert process.returncode == 0, "".join(output) + tail
+    old_coverage = json.loads((migrated_run / "coverage.json").read_text())
+    result = subprocess.run(migrating + ["--resume", "--resume-batch-size", "6", "--sampling-version", "3", "--upgrade-sampler"],
+                            env=env, text=True, capture_output=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    migrated_spec = json.loads((migrated_run / "run.json").read_text())
+    assert migrated_spec["batch_size"] == 6 and migrated_spec["sampling_version"] == 3
+    assert migrated_spec["coverage_phases"][-1]["start_anchor_draws"] == old_coverage["supervised_anchor_draws"]
+    assert json.loads((migrated_run / "coverage.json").read_text())["complete"]
+    assert (migrated_run / f"performance_migration_{old_coverage['completed_steps']}.json").exists()
 
 
 def test_legacy_interrupted_step_counter_requires_optimizer_agreement():

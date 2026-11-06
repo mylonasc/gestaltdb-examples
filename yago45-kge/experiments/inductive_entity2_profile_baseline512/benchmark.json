@@ -1,0 +1,48 @@
+{
+  "run_directory": "/home/charilaos/Workspace/gestaltdb-examples/yago45-kge/../data/yago45_full/inductive_full_entity2_h128_mp3",
+  "checkpoint": "/home/charilaos/Workspace/gestaltdb-examples/yago45-kge/../data/yago45_full/inductive_full_entity2_h128_mp3/checkpoints/ckpt-20439",
+  "model": {
+    "num_train_nodes": 43463828,
+    "num_relations": 63,
+    "dim": 200,
+    "base_dim": 32,
+    "embedding_device": "cpu",
+    "hidden_dim": 128,
+    "layers": 3,
+    "encoder": "tf-gnns",
+    "residual": true
+  },
+  "fanouts": [
+    8,
+    4,
+    2
+  ],
+  "negatives": 8,
+  "original_batch_size": 128,
+  "completed_training_steps": 20439,
+  "warmup": 3,
+  "measured_batches": 15,
+  "note": "Ephemeral optimizer updates; checkpoint restored once by trainer; use one size per process for isolated comparisons; run checkpoint and coverage untouched.",
+  "batches": [
+    {
+      "positive_seconds": 0.004876767669338733,
+      "negatives_seconds": 0.012960386470270653,
+      "neighborhood_seconds": 0.5784973921215472,
+      "localization_seconds": 0.00017484060178200403,
+      "tensor_conversion_seconds": 0.005746330138451109,
+      "update_seconds": 0.041247441340237855,
+      "total_seconds": 0.6435602834642243,
+      "entities": 512.0,
+      "nodes": 60494.0,
+      "edges": 167162.13333333333,
+      "loss": 2.463781388600667,
+      "batch_size": 512,
+      "entities_per_second": 795.574265776552,
+      "gpu_memory": {
+        "current": 44828928,
+        "peak": 3131867904
+      },
+      "replay_update_seconds": 0.04121211453651388
+    }
+  ]
+}

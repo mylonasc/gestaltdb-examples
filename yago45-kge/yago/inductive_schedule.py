@@ -18,7 +18,7 @@ class EntityCoverageSchedule:
     retaining the fact's original direction. No support/test facts are read.
     """
 
-    def __init__(self, num_entities, batch_size, passes, seed):
+    def __init__(self, num_entities, batch_size, passes, seed, phases=None):
         if min(num_entities, batch_size, passes) <= 0:
             raise ValueError("entity count, batch size and passes must be positive")
         # Bound vectorized affine products to signed int64.
@@ -29,7 +29,38 @@ class EntityCoverageSchedule:
         self.passes = int(passes)
         self.seed = int(seed)
         self.steps_per_pass = math.ceil(num_entities / batch_size)
-        self.total_steps = self.steps_per_pass * passes
+        self.phases = phases or [dict(start_step=0, start_anchor_draws=0, batch_size=self.batch_size)]
+        if self.phases[0] != dict(start_step=0, start_anchor_draws=0, batch_size=self.phases[0]["batch_size"]):
+            raise ValueError("coverage phases must start at step/draw zero")
+        for previous, phase in zip(self.phases, self.phases[1:]):
+            if phase['start_step'] <= previous['start_step'] or phase['batch_size'] <= 0:
+                raise ValueError("coverage phase steps must increase and batch sizes must be positive")
+            if self._draws(previous, phase['start_step']) != phase['start_anchor_draws']:
+                raise ValueError("coverage phase skips or repeats scheduled anchor draws")
+        if self.phases[-1]['batch_size'] != self.batch_size:
+            raise ValueError("latest phase batch size differs from schedule")
+        last = self.phases[-1]
+        full, partial = divmod(last['start_anchor_draws'], self.num_entities)
+        if full >= passes:
+            raise ValueError("cannot start a new phase after coverage is complete")
+        self.total_steps = (last['start_step'] + math.ceil((self.num_entities - partial) / self.batch_size)
+                            + (passes - full - 1) * self.steps_per_pass)
+
+    def _draws(self, phase, completed_steps):
+        full, partial = divmod(phase['start_anchor_draws'], self.num_entities)
+        remaining = self.num_entities - partial
+        first_steps = math.ceil(remaining / phase['batch_size'])
+        steps = completed_steps - phase['start_step']
+        if steps <= first_steps:
+            return phase['start_anchor_draws'] + min(steps * phase['batch_size'], remaining)
+        full_after, batch = divmod(steps - first_steps, math.ceil(self.num_entities / phase['batch_size']))
+        return (full + 1 + full_after) * self.num_entities + min(batch * phase['batch_size'], self.num_entities)
+
+    def draws_at(self, completed_steps):
+        if not 0 <= completed_steps <= self.total_steps:
+            raise ValueError("step lies outside the coverage schedule")
+        phase = next(phase for phase in reversed(self.phases) if phase['start_step'] <= completed_steps)
+        return self._draws(phase, completed_steps)
 
     @lru_cache(maxsize=4)
     def permutation(self, epoch):
@@ -42,9 +73,9 @@ class EntityCoverageSchedule:
     def anchors(self, completed_steps):
         if not 0 <= completed_steps < self.total_steps:
             raise ValueError("step lies outside the coverage schedule")
-        epoch, batch = divmod(completed_steps, self.steps_per_pass)
-        start = batch * self.batch_size
-        positions = np.arange(start, min(start + self.batch_size, self.num_entities), dtype=np.int64)
+        epoch, start = divmod(self.draws_at(completed_steps), self.num_entities)
+        phase = next(phase for phase in reversed(self.phases) if phase['start_step'] <= completed_steps)
+        positions = np.arange(start, min(start + phase['batch_size'], self.num_entities), dtype=np.int64)
         multiplier, offset = self.permutation(epoch)
         return (positions * multiplier + offset) % self.num_entities
 
@@ -85,14 +116,14 @@ class EntityCoverageSchedule:
     def progress(self, completed_steps):
         if not 0 <= completed_steps <= self.total_steps:
             raise ValueError("step lies outside the coverage schedule")
-        full_passes, batch = divmod(completed_steps, self.steps_per_pass)
-        partial = min(batch * self.batch_size, self.num_entities)
+        full_passes, partial = divmod(self.draws_at(completed_steps), self.num_entities)
         return dict(protocol="entity-anchored incident training facts; affine bijection v1",
                     training_entities=self.num_entities, requested_passes=self.passes,
                     completed_steps=completed_steps, target_steps=self.total_steps,
                     complete=completed_steps == self.total_steps,
                     completed_entity_passes=full_passes, entities_in_partial_pass=partial,
                     supervised_anchor_draws=full_passes * self.num_entities + partial,
+                    batch_size_history=self.phases,
                     guaranteed_minimum_supervised_appearances_per_entity=full_passes,
                     excludes_unseen_entities=True,
                     guarantee="positive endpoint participation, not nonzero-gradient or convergence guarantee")

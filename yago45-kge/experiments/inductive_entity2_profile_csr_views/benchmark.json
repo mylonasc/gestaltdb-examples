@@ -1,0 +1,110 @@
+{
+  "run_directory": "/home/charilaos/Workspace/gestaltdb-examples/yago45-kge/../data/yago45_full/inductive_full_entity2_h128_mp3",
+  "checkpoint": "/home/charilaos/Workspace/gestaltdb-examples/yago45-kge/../data/yago45_full/inductive_full_entity2_h128_mp3/checkpoints/ckpt-20439",
+  "model": {
+    "num_train_nodes": 43463828,
+    "num_relations": 63,
+    "dim": 200,
+    "base_dim": 32,
+    "embedding_device": "cpu",
+    "hidden_dim": 128,
+    "layers": 3,
+    "encoder": "tf-gnns",
+    "residual": true
+  },
+  "fanouts": [
+    8,
+    4,
+    2
+  ],
+  "negatives": 8,
+  "original_batch_size": 128,
+  "completed_training_steps": 20439,
+  "sampling_version": 2,
+  "csr_indptr_type": "ndarray",
+  "warmup": 3,
+  "measured_batches": 20,
+  "note": "Ephemeral optimizer updates; checkpoint restored once by trainer; use one size per process for isolated comparisons; run checkpoint and coverage untouched.",
+  "batches": [
+    {
+      "positive_seconds": 0.0009218071034410968,
+      "negatives_seconds": 0.003208366100443527,
+      "neighborhood_seconds": 0.12926924799685366,
+      "localization_seconds": 5.59053965844214e-05,
+      "tensor_conversion_seconds": 0.001908576543792151,
+      "update_seconds": 0.013204013594076969,
+      "total_seconds": 0.14857777034922037,
+      "entities": 128.0,
+      "nodes": 18378.9,
+      "edges": 48119.1,
+      "loss": 2.4680487275123597,
+      "batch_size": 128,
+      "entities_per_second": 861.5016883019987,
+      "gpu_memory": {
+        "current": 28051712,
+        "peak": 930292224
+      },
+      "replay_update_seconds": 0.011987280752509832
+    },
+    {
+      "positive_seconds": 0.0017058950994396581,
+      "negatives_seconds": 0.006300735453260131,
+      "neighborhood_seconds": 0.23619644484715535,
+      "localization_seconds": 0.00010172540496569126,
+      "tensor_conversion_seconds": 0.003623652650276199,
+      "update_seconds": 0.021335217088926585,
+      "total_seconds": 0.2692978008999489,
+      "entities": 256.0,
+      "nodes": 33102.4,
+      "edges": 88879.3,
+      "loss": 2.3115847945213317,
+      "batch_size": 256,
+      "entities_per_second": 950.6204623449955,
+      "gpu_memory": {
+        "current": 44828928,
+        "peak": 1729437184
+      },
+      "replay_update_seconds": 0.01961774250085
+    },
+    {
+      "positive_seconds": 0.0031397499988088384,
+      "negatives_seconds": 0.012578628101618961,
+      "neighborhood_seconds": 0.4456089362502098,
+      "localization_seconds": 0.00017656299751251937,
+      "tensor_conversion_seconds": 0.005847237497800961,
+      "update_seconds": 0.041518628495396115,
+      "total_seconds": 0.5089706969534745,
+      "entities": 512.0,
+      "nodes": 60343.6,
+      "edges": 166859.7,
+      "loss": 2.169305604696274,
+      "batch_size": 512,
+      "entities_per_second": 1005.9518221081446,
+      "gpu_memory": {
+        "current": 42747136,
+        "peak": 3014248960
+      },
+      "replay_update_seconds": 0.041428209748119116
+    },
+    {
+      "positive_seconds": 0.0061292740574572235,
+      "negatives_seconds": 0.025170843943487852,
+      "neighborhood_seconds": 0.8356743200012715,
+      "localization_seconds": 0.000350830249954015,
+      "tensor_conversion_seconds": 0.012480241959565319,
+      "update_seconds": 0.07766919595596847,
+      "total_seconds": 0.9576245548552833,
+      "entities": 1024.0,
+      "nodes": 108246.35,
+      "edges": 308833.9,
+      "loss": 2.0931916177272796,
+      "batch_size": 1024,
+      "entities_per_second": 1069.3125973098583,
+      "gpu_memory": {
+        "current": 65982208,
+        "peak": 5556940544
+      },
+      "replay_update_seconds": 0.07588706920214464
+    }
+  ]
+}

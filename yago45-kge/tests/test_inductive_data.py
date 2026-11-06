@@ -121,3 +121,70 @@ def test_zero_degree_controls_do_not_inject_the_only_zero_degree_object():
         3, {(7, 0): {0, 5}}, np.random.default_rng(13))
     assert candidates[0] == 5
     assert set(candidates[1:]) == {4, 6, 7}
+
+
+def test_plain_csr_views_preserve_memmap_backing_and_exact_rng_stream(tmp_path):
+    from types import SimpleNamespace
+    from gestaltdb.sampling.adjacency import CSRAdjacency
+    edges = np.asarray([[0, 0, i] for i in range(1, 81)] + [[i, 1, 0] for i in range(1, 40)])
+    graph = NeighborhoodGraph(edges, 82, 2, snapshot_path=tmp_path / "csr", compact=True, feature_mode="full")
+    assert type(graph.snapshot.out.indptr) is np.ndarray
+    assert isinstance(graph.snapshot.out.indptr.base, np.memmap)
+    path = next((tmp_path / "csr").iterdir())
+    legacy = NeighborhoodGraph(edges, 82, 2, snapshot_path=tmp_path / "csr", compact=True, feature_mode="full")
+    legacy.snapshot = SimpleNamespace(**{name: CSRAdjacency(
+        np.load(path / f"{direction}_indptr.npy", mmap_mode="r"),
+        np.load(path / f"{direction}_edge_indices.npy", mmap_mode="r"))
+        for name, direction in (("out", "out"), ("in_", "in"))})
+    old_rng, new_rng = np.random.default_rng(13), np.random.default_rng(13)
+    for _ in range(10):
+        expected_ids, expected_graph = legacy.sample([0, 1, 81], [8, 4, 2], old_rng, masked=[[0, 0, 1]])
+        ids, actual = graph.sample([0, 1, 81], [8, 4, 2], new_rng, masked=[[0, 0, 1]])
+        np.testing.assert_array_equal(ids, expected_ids)
+        for key in actual:
+            np.testing.assert_array_equal(actual[key], expected_graph[key])
+    assert old_rng.bit_generator.state == new_rng.bit_generator.state
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_vectorized_sampler_masks_before_expansion_and_is_uniform(tmp_path, compact):
+    edges = np.asarray([[0, 0, i] for i in range(1, 1001)])
+    graph = NeighborhoodGraph(edges, 1001, 1, sampling_version=3,
+                              snapshot_path=tmp_path / "csr" if compact else None, compact=compact)
+    rng = np.random.default_rng(13)
+    draws = []
+    for _ in range(300):
+        ids, batch = graph.sample([0], [4], rng, masked=[[0, 0, 1]])
+        assert len(ids) == 5 and 1 not in ids
+        assert len(batch["senders"]) == 8
+        draws.extend(ids[ids != 0])
+    assert abs(np.mean(draws) - 501) < 40
+
+
+def test_vectorized_sampler_matches_full_fanout_and_handles_duplicate_masked_edges(tmp_path):
+    edges = np.asarray([[0, 0, 1]] * 12 + [[0, 0, i] for i in range(2, 7)] + [[6, 1, 7]])
+    graph = NeighborhoodGraph(edges, 9, 2, sampling_version=3, feature_mode="full",
+                              snapshot_path=tmp_path / "csr", compact=True)
+    for fans in ([4], [100, 100, 100]):
+        ids, batch = graph.sample([0, 8], fans, np.random.default_rng(1), masked=[[0, 0, 1]])
+        assert 1 not in ids and 8 in ids
+        assert np.all(np.isfinite(batch['features']))
+        assert len(ids) >= 6
+    graph.sampling_version = 2
+    expected_ids, expected = graph.sample([0, 8], [100, 100, 100], np.random.default_rng(1), masked=[[0, 0, 1]])
+    graph.sampling_version = 3
+    ids, actual = graph.sample([0, 8], [100, 100, 100], np.random.default_rng(1), masked=[[0, 0, 1]])
+    np.testing.assert_array_equal(ids, expected_ids)
+    for key in actual:
+        np.testing.assert_array_equal(actual[key], expected[key])
+
+
+def test_vectorized_sampler_does_not_bias_small_masked_adjacencies():
+    graph = NeighborhoodGraph(np.asarray([[0, 0, i] for i in range(1, 6)]), 6, 1, sampling_version=3)
+    rng = np.random.default_rng(13)
+    counts = np.zeros(6, dtype=np.int64)
+    for _ in range(300):
+        ids, _ = graph.sample([0], [3], rng, masked=[[0, 0, 1]])
+        counts[ids] += 1
+    assert counts[1] == 0
+    assert all(185 < count < 265 for count in counts[2:])

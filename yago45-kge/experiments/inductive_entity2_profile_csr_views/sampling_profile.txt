@@ -1,0 +1,58 @@
+         901310 function calls (901260 primitive calls) in 0.616 seconds
+
+   Ordered by: cumulative time
+   List reduced from 155 to 50 due to restriction <50>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        3    0.010    0.003    0.616    0.205 inductive_batch.py:7(prepare_batch)
+        3    0.111    0.037    0.594    0.198 inductive_data.py:193(sample)
+    36347    0.226    0.000    0.361    0.000 inductive_data.py:177(draw_incident)
+        6    0.000    0.000    0.069    0.011 _arraysetops_impl.py:145(unique)
+        6    0.001    0.000    0.068    0.011 _arraysetops_impl.py:350(_unique1d)
+        6    0.067    0.011    0.067    0.011 {method 'sort' of 'numpy.ndarray' objects}
+    24327    0.010    0.000    0.053    0.000 fromnumeric.py:3325(prod)
+    25095    0.021    0.000    0.044    0.000 fromnumeric.py:66(_wrapreduction)
+    73846    0.036    0.000    0.036    0.000 adjacency.py:25(edge_range)
+    22791    0.018    0.000    0.024    0.000 numeric.py:323(full)
+   292775    0.020    0.000    0.020    0.000 {built-in method builtins.len}
+   180402    0.017    0.000    0.017    0.000 {method 'add' of 'set' objects}
+       21    0.015    0.001    0.015    0.001 {built-in method builtins.sorted}
+    25107    0.014    0.000    0.014    0.000 {method 'reduce' of 'numpy.ufunc' objects}
+    59147    0.010    0.000    0.010    0.000 {built-in method numpy.empty}
+    25131    0.007    0.000    0.007    0.000 {built-in method builtins.getattr}
+        3    0.000    0.000    0.005    0.002 inductive_schedule.py:51(positives)
+    13559    0.004    0.000    0.004    0.000 {built-in method numpy.arange}
+    36347    0.004    0.000    0.004    0.000 {method 'get' of 'dict' objects}
+        3    0.000    0.000    0.004    0.001 _index.py:29(__getitem__)
+      792    0.000    0.000    0.003    0.000 fromnumeric.py:1459(searchsorted)
+        9    0.003    0.000    0.003    0.000 {built-in method numpy.zeros}
+      798    0.000    0.000    0.003    0.000 fromnumeric.py:48(_wrapfunc)
+    25101    0.003    0.000    0.003    0.000 {method 'items' of 'dict' objects}
+        3    0.000    0.000    0.002    0.001 _csr.py:283(_get_arrayXslice)
+        3    0.001    0.000    0.002    0.001 _compressed.py:579(_major_index_fancy)
+      703    0.002    0.000    0.002    0.000 {built-in method numpy.asarray}
+      792    0.002    0.000    0.002    0.000 {method 'searchsorted' of 'numpy.ndarray' objects}
+        3    0.000    0.000    0.002    0.001 _compressed.py:1011(toarray)
+    24327    0.002    0.000    0.002    0.000 fromnumeric.py:3320(_prod_dispatcher)
+      393    0.002    0.000    0.002    0.000 {method 'update' of 'set' objects}
+      384    0.000    0.000    0.002    0.000 inductive_data.py:416(__getitem__)
+      768    0.000    0.000    0.002    0.000 fromnumeric.py:2342(sum)
+    22791    0.002    0.000    0.002    0.000 multiarray.py:1088(copyto)
+      384    0.001    0.000    0.002    0.000 inductive_data.py:401(get)
+        3    0.000    0.000    0.001    0.000 _index.py:298(_validate_indices)
+      903    0.000    0.000    0.001    0.000 {built-in method builtins.isinstance}
+        6    0.000    0.000    0.001    0.000 _sparse.py:10(issparse)
+        7    0.000    0.000    0.001    0.000 <frozen abc>:117(__instancecheck__)
+        7    0.000    0.000    0.001    0.000 {built-in method _abc._abc_instancecheck}
+        3    0.000    0.000    0.001    0.000 _base.py:1682(_process_toarray_args)
+     27/2    0.001    0.000    0.001    0.001 <frozen abc>:121(__subclasscheck__)
+     27/2    0.000    0.000    0.001    0.001 {built-in method _abc._abc_subclasscheck}
+        3    0.001    0.000    0.001    0.000 {built-in method scipy.sparse._sparsetools.csr_row_index}
+     1152    0.000    0.000    0.001    0.000 inductive_data.py:171(outgoing)
+        3    0.001    0.000    0.001    0.000 {built-in method scipy.sparse._sparsetools.csr_todense}
+     1530    0.000    0.000    0.001    0.000 {built-in method builtins.all}
+        6    0.000    0.000    0.000    0.000 shape_base.py:378(stack)
+        6    0.000    0.000    0.000    0.000 {built-in method numpy._core._multiarray_umath._unique_hash}
+       12    0.000    0.000    0.000    0.000 _index_tricks_impl.py:343(__getitem__)
+
+

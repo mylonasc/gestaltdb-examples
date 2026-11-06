@@ -1,0 +1,58 @@
+         66376 function calls (66326 primitive calls) in 0.195 seconds
+
+   Ordered by: cumulative time
+   List reduced from 182 to 50 due to restriction <50>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        3    0.007    0.002    0.195    0.065 inductive_batch.py:7(prepare_batch)
+        3    0.021    0.007    0.177    0.059 inductive_data.py:193(sample)
+       30    0.000    0.000    0.089    0.003 _arraysetops_impl.py:145(unique)
+       30    0.001    0.000    0.088    0.003 _arraysetops_impl.py:350(_unique1d)
+        3    0.040    0.013    0.070    0.023 inductive_data.py:273(vectorized_neighborhood)
+       30    0.069    0.002    0.069    0.002 {method 'sort' of 'numpy.ndarray' objects}
+       30    0.018    0.001    0.018    0.001 {built-in method numpy._core._multiarray_umath._unique_hash}
+        9    0.000    0.000    0.008    0.001 _arraysetops_impl.py:1083(union1d)
+     3641    0.001    0.000    0.005    0.000 fromnumeric.py:48(_wrapfunc)
+     2827    0.001    0.000    0.005    0.000 fromnumeric.py:1459(searchsorted)
+        3    0.000    0.000    0.004    0.001 inductive_schedule.py:82(positives)
+     2481    0.002    0.000    0.004    0.000 fromnumeric.py:66(_wrapreduction)
+     3510    0.004    0.000    0.004    0.000 {method 'reduce' of 'numpy.ufunc' objects}
+     1695    0.001    0.000    0.004    0.000 fromnumeric.py:3325(prod)
+      384    0.002    0.000    0.004    0.000 inductive_data.py:177(draw_incident)
+       57    0.003    0.000    0.003    0.000 {built-in method numpy.asarray}
+       12    0.003    0.000    0.003    0.000 {built-in method builtins.sorted}
+     2827    0.003    0.000    0.003    0.000 {method 'searchsorted' of 'numpy.ndarray' objects}
+     1011    0.000    0.000    0.003    0.000 fromnumeric.py:2474(any)
+        9    0.003    0.000    0.003    0.000 {built-in method numpy.zeros}
+     1014    0.001    0.000    0.003    0.000 fromnumeric.py:86(_wrapreduction_any_all)
+        3    0.000    0.000    0.002    0.001 _index.py:29(__getitem__)
+        3    0.000    0.000    0.002    0.001 _csr.py:283(_get_arrayXslice)
+        3    0.001    0.000    0.002    0.001 _compressed.py:579(_major_index_fancy)
+      781    0.001    0.000    0.002    0.000 numeric.py:675(flatnonzero)
+        3    0.000    0.000    0.002    0.001 _compressed.py:1011(toarray)
+      384    0.000    0.000    0.002    0.000 inductive_data.py:416(__getitem__)
+      768    0.000    0.000    0.002    0.000 fromnumeric.py:2342(sum)
+      384    0.001    0.000    0.001    0.000 inductive_data.py:401(get)
+      790    0.000    0.000    0.001    0.000 fromnumeric.py:2031(nonzero)
+        3    0.000    0.000    0.001    0.000 _base.py:1682(_process_toarray_args)
+        3    0.001    0.000    0.001    0.000 {built-in method scipy.sparse._sparsetools.csr_row_index}
+        9    0.000    0.000    0.001    0.000 _arraysetops_impl.py:1120(setdiff1d)
+     1920    0.001    0.000    0.001    0.000 adjacency.py:25(edge_range)
+      790    0.001    0.000    0.001    0.000 {method 'nonzero' of 'numpy.ndarray' objects}
+        9    0.000    0.000    0.001    0.000 _arraysetops_impl.py:806(_isin)
+     1152    0.000    0.000    0.001    0.000 inductive_data.py:171(outgoing)
+     5366    0.001    0.000    0.001    0.000 {built-in method builtins.getattr}
+        3    0.001    0.000    0.001    0.000 {built-in method scipy.sparse._sparsetools.csr_todense}
+      781    0.000    0.000    0.001    0.000 fromnumeric.py:1917(ravel)
+     1489    0.000    0.000    0.001    0.000 {built-in method builtins.all}
+     7361    0.001    0.000    0.001    0.000 {built-in method builtins.len}
+        9    0.000    0.000    0.000    0.000 {method 'argsort' of 'numpy.ndarray' objects}
+        6    0.000    0.000    0.000    0.000 shape_base.py:378(stack)
+      227    0.000    0.000    0.000    0.000 numeric.py:323(full)
+       12    0.000    0.000    0.000    0.000 _index_tricks_impl.py:343(__getitem__)
+     3504    0.000    0.000    0.000    0.000 {method 'items' of 'dict' objects}
+       30    0.000    0.000    0.000    0.000 {method 'flatten' of 'numpy.ndarray' objects}
+       27    0.000    0.000    0.000    0.000 {method 'astype' of 'numpy.ndarray' objects}
+     1480    0.000    0.000    0.000    0.000 inductive_batch.py:27(<genexpr>)
+
+

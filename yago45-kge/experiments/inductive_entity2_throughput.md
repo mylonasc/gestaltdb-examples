@@ -122,14 +122,25 @@ already exceed it, and eight overproduce. A prepared batch pickles to 31.4 MiB
 (11.1 ms dump, 1.8 ms load), so a real multi-process trainer needs shared
 memory or parent-side feature assembly. With that overhead controlled, the
 projected end-to-end rate is roughly **15–18 updates/s**, not the 25/s
-generation rate. These are projections; no parallel-training run has been
-measured.
+generation rate.
 
-**Not applied to the running experiment.** The live run remains at ~5.4
-updates/s and ~2,780 anchors/s. Switching it to prefetch or a producer pool
-would require another explicit migration plus RNG/checkpoint semantics (the
-producer advances the sampling RNG ahead of the consumed optimizer step).
-That is deferred rather than silently mixed into the current two-pass run.
+## Applied to the running experiment (step 44,631)
+
+The live run was stopped at complete step **44,631** (clean SIGTERM save) and
+resumed with 4 forked shared-memory producers / 8 slots
+(`performance_migration_44631.json`). Coverage phases and the anchor sequence
+are byte-identical to the pre-migration schedule; only the incident-fact /
+negative RNG stream changed from sequential PCG to deterministic per-step
+`SeedSequence([seed, 0x9E3779B1, step])`, recorded as `batch_rng:
+per-step-seed-v1` in `run.json`. Coverage at the boundary is continuous:
+15,002,496 supervised anchor draws, matching the old schedule exactly.
+
+Measured end-to-end rate after resume ramped **5.2 → 18.0 updates/s**
+(cumulative since resume, still climbing toward steady state), matching the
+15–18 projection. Throughput flags live in
+`scripts/train_inductive_entity2.sh`; profiling commands must explicitly pass
+`--prefetch-workers 0` since prefetch and `--profile-batches` are mutually
+exclusive.
 
 GestaltDB exposes no CUDA/GPU-resident sampler; its Torch/PyG/DGL support is
 output conversion only. Keeping the GPU busier therefore means feeding its CPU

@@ -27,7 +27,7 @@ yet. It is not an official YAGO release and is not endorsed by the YAGO team.
   no learned entity-ID row is required for the GNN.
 - Outputs: normalized 200-dimensional contextual entity vectors.
 - Decoder: relation-conditioned ComplEx scoring.
-- Standalone TensorFlow SavedModel: approximately 1.3 MB, with `encode`,
+- Standalone TensorFlow SavedModel: approximately 4 MB, with `encode`,
   `predict_graph`, and `score_embeddings` interfaces.
 - Independently trained 32-dimensional shallow ComplEx tables are a separate
   representation, not GNN inputs. They are not included in the standalone GNN.

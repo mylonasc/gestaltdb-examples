@@ -144,7 +144,7 @@ Frequency here is simply observed incoming-predicate count, with expected ties.
 - [Complete report and raw rankings](../""" + report_rel + """/README.md)
 - [Source manifest and SHA256](../experiments/inductive_full_manifest.json)
 - [Standalone GNN SavedModel](../""" + report_rel + """/gnn_saved_model/):
-  about 1.3 MB; excludes entity-ID tables; exposes `encode`, `predict_graph`,
+  about 4 MB; excludes entity-ID tables; exposes `encode`, `predict_graph`,
   and `score_embeddings`.
 - [Method, training and CLI commands](../docs/09-inductive-autoencoder.md)
 - [Tiny mixed-negative control](../experiments/inductive_tiny_mixed_10k/README.md)

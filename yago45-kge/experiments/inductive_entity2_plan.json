@@ -1,5 +1,5 @@
 {
-  "status": "Two-pass training resumed with optimized sampler and coverage-preserving batch-512 migration; implementation passes 48 tests; no completed two-pass results claimed yet",
+  "status": "Two-pass training at step ~45000/185111 with 4-worker shared-memory prefetch (~18 updates/s, was 5.2); coverage migration at 44631 audited, anchors continuous; 53 tests pass",
   "throughput_evidence": "inductive_entity2_throughput.md",
   "previous_results": "inductive_full_20k/",
   "dataset_digest": "07e72b619dd2a71bb0d2c9f1ca9346fbc13c645625a399f435e036c9414ca1d2",
@@ -19,7 +19,11 @@
   "hidden_width": 128,
   "message_passing_steps": 3,
   "residual": "node and edge additive skips at each tf_gnns process step, plus outer node skip",
-  "fanouts": [8, 4, 2],
+  "fanouts": [
+    8,
+    4,
+    2
+  ],
   "output_dimension": 200,
   "shallow_dimension": 32,
   "model_initialization": "new training from scratch; previous weights and embedding cache preserved",
@@ -29,5 +33,12 @@
   "performance_migration_command": "bash scripts/train_inductive_entity2.sh --resume --resume-batch-size 512 --upgrade-sampler",
   "local_run_directory": "data/yago45_full/inductive_full_entity2_h128_mp3",
   "local_progress_file": "data/yago45_full/inductive_full_entity2_h128_mp3/coverage.json",
-  "storage_note": "Retain only one optimizer checkpoint plus validation-best weights. A new all-node embedding cache needs additional free disk; do not delete previous artifacts."
+  "storage_note": "Retain only one optimizer checkpoint plus validation-best weights. A new all-node embedding cache needs additional free disk; do not delete previous artifacts.",
+  "prefetch": {
+    "workers": 4,
+    "slots": 8,
+    "batch_rng": "per-step-seed-v1"
+  },
+  "performance_migration_step_2": 44631,
+  "anchors_completed_before_migration_2": 15002496
 }

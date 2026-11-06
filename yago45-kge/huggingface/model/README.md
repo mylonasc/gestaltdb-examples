@@ -36,6 +36,42 @@ Intended for research on inductive graph representations and link completion.
 An unseen entity needs an observed neighborhood; entity names alone are not
 model inputs. Cosine similarity is not validated as a general semantic metric.
 
+## Get started
+
+`yago45-kge/scripts/score_with_pretrained.py` runs both supported paths with
+no training data. Fetch the artifacts once:
+
+```bash
+hf download mylonasc/yago45-inductive-gnn
+hf download mylonasc/yago45-inductive-embeddings --repo-type dataset
+```
+
+Score named triples against the static 49M-vector cache:
+
+```bash
+.venv/bin/python scripts/score_with_pretrained.py \
+  --model-dir mylonasc/yago45-inductive-gnn \
+  --cache-dir <embeddings-checkout> --triples queries.tsv
+```
+
+`--model-dir` also accepts a local SavedModel path; a bare `user/repo` ID is
+fetched with `hf download` when needed. `queries.tsv` holds
+`subject<TAB>relation<TAB>object` name triples, one per line, using the
+released `node_id` strings and the 63 relation IDs.
+
+Score a fresh edge list (entities need never have been trained on):
+
+```bash
+.venv/bin/python scripts/score_with_pretrained.py \
+  --model-dir mylonasc/yago45-inductive-gnn \
+  --edges my_graph.tsv --query 0 --corruptions 4
+```
+
+The query edge is masked from its own neighborhood before encoding, then
+ranked against same-relation corruptions. Relation names must be the trained
+relation IDs (listed in the export `metadata.json`); the script errors
+otherwise instead of silently misaligning feature channels.
+
 ## Training and data
 
 Source: YAGO archive `yago-4.5.0.2.zip`, SHA256

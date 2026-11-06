@@ -3,13 +3,23 @@
 Run from yago45-kge with .venv/bin/python scripts/build_inductive_notebook.py.
 Requires nbformat, nbclient and ipykernel; no TensorFlow or source dataset needed.
 """
+from argparse import ArgumentParser
 from pathlib import Path
 
 import nbformat as nbf
 from nbclient import NotebookClient
 
 
+parser = ArgumentParser(__doc__)
+parser.add_argument("--report", default="experiments/inductive_full_20k",
+                    help="Evidence directory, relative to yago45-kge")
+parser.add_argument("--output", default="notebooks/02_inductive_full_results.ipynb",
+                    help="Notebook path, relative to yago45-kge")
+options = parser.parse_args()
+
+
 root = Path(__file__).resolve().parents[1]
+report_rel = options.report
 md = nbf.v4.new_markdown_cell
 code = nbf.v4.new_code_cell
 notebook = nbf.v4.new_notebook(cells=[
@@ -26,34 +36,35 @@ separately and are **not** inputs to the transferable encoder.
 up to 50 negatives, pessimistic model ties. These are not full-ranking metrics.
 Checkpoint selection uses only temporal validation (mean of uniform/range MRR).
 """),
-    code("""import json
-from pathlib import Path
-from IPython.display import display, Markdown, Image
-
-root = Path.cwd()
-if not (root / 'experiments').exists():
-    root = root.parent
-report = root / 'experiments' / 'inductive_full_20k'
-summary = json.loads((report / 'summary.json').read_text())
-results = summary['results']
-
-def table(headers, rows):
-    display(Markdown('| ' + ' | '.join(headers) + ' |\\n|' +
-                     '|'.join(['---'] * len(headers)) + '|\\n' +
-                     '\\n'.join('| ' + ' | '.join(map(str, row)) + ' |' for row in rows)))
-
-table(['Dataset / budget', 'Value'], [
-    ['Mapped entities', f"{summary['num_nodes']:,}"],
-    ['Training facts', f"{summary['splits']['train']:,}"],
-    ['Inference-support facts', f"{summary['splits']['support']:,}"],
-    ['Relations', summary['num_relations']],
-    ['Updates / selected step', f"{summary['completed_steps']:,} / {summary['best']['step']:,}"],
-    ['Seed-draw-equivalent epochs', f"{summary['seed_draw_equivalent_epochs']:.6f}"],
-])"""),
+    code("import json\n"
+         "from pathlib import Path\n"
+         "from IPython.display import display, Markdown, Image\n"
+         "\n"
+         "root = Path.cwd()\n"
+         "if not (root / 'experiments').exists():\n"
+         "    root = root.parent\n"
+         f"report = root / '{report_rel}'\n"
+         "summary = json.loads((report / 'summary.json').read_text())\n"
+         "results = summary['results']\n"
+         "\n"
+         "def table(headers, rows):\n"
+         "    display(Markdown('| ' + ' | '.join(headers) + ' |\\n|'\n"
+         "                     + '|'.join(['---'] * len(headers)) + '|\\n'\n"
+         "                     + '\\n'.join('| ' + ' | '.join(map(str, row)) + ' |' for row in rows)))\n"
+         "\n"
+         "table(['Dataset / budget', 'Value'], [\n"
+         "    ['Mapped entities', f\"{summary['num_nodes']:,}\"],\n"
+         "    ['Training facts', f\"{summary['splits']['train']:,}\"],\n"
+         "    ['Inference-support facts', f\"{summary['splits']['support']:,}\"],\n"
+         "    ['Relations', summary['num_relations']],\n"
+         "    ['Updates / selected step', f\"{summary['completed_steps']:,} / {summary['best']['step']:,}\"],\n"
+         "    ['Seed-draw-equivalent epochs', f\"{summary['seed_draw_equivalent_epochs']:.6f}\"],\n"
+         "])\n"),
     md("""The uncapped archive yielded 119,045,262 structural entity–entity facts.
 Temporal exclusion, deduplication and independent splits produce the counts above.
-The full graph is available as context, but 2.56M supervised seed draws are **not
-an exhaustive supervised pass** over 96.43M training facts."""),
+The full graph is available as context; supervised anchor draws cover every
+training entity (see the draws/epochs row), which is participation coverage,
+**not** an exhaustive supervised pass over every training fact."""),
     md('## Unseen-entity link prediction and controls'),
     code("""rows = []
 for policy in ['uniform', 'relation-range']:
@@ -83,9 +94,9 @@ Degree-matched candidates are an additional diagnostic, not a tuning objective."
     for policy in ['uniform', 'relation-range']])"""),
     md("""Dates are earliest triple-level validity starts: training through 2010,
 validation 2011–2018, test 2019–2024. Undated static background remains available.
-**This is not causal knowledge-acquisition forecasting.** The temporal uniform
-GNN result underperforms frequency; the range result improves on it. Neither
-test policy was used for checkpoint selection or further tuning."""),
+**This is not causal knowledge-acquisition forecasting.** Neither test policy
+was used for checkpoint selection or further tuning; compare each GNN number
+against its own frequency control in the table above."""),
     md('## Losses and validation curves'),
     code("""display(Image(filename=str(report / 'learning_curves.png')))
 table(['Final objective', 'Loss'], [
@@ -95,8 +106,9 @@ table(['Final objective', 'Loss'], [
     code("""display(Image(filename=str(report / 'gnn_tsne.png')))
 v = summary['visualization']
 table(['Visualization diagnostic', 'Value'], list(v.items()))"""),
-    md("""3,000 sampled contextual vectors include 346 unseen entities. Colors denote
-dominant relations in observed neighborhoods, not held-out semantic classes.
+    md("""Sampled contextual vectors include both train and unseen entities (see the
+diagnostics table). Colors denote dominant relations in observed neighborhoods,
+not held-out semantic classes.
 t-SNE uses PCA initialization and a fixed seed. Relation 1-NN agreement and
 trustworthiness measure this diagnostic only; they are **not semantic benchmark
 accuracy**, and 2-D spacing must not be interpreted as calibrated similarity."""),
@@ -129,9 +141,9 @@ Frequency here is simply observed incoming-predicate count, with expected ties.
 """),
     md("""## Reusable artifacts and reproduction
 
-- [Complete report and raw rankings](../experiments/inductive_full_20k/README.md)
+- [Complete report and raw rankings](../""" + report_rel + """/README.md)
 - [Source manifest and SHA256](../experiments/inductive_full_manifest.json)
-- [Standalone GNN SavedModel](../experiments/inductive_full_20k/gnn_saved_model/):
+- [Standalone GNN SavedModel](../""" + report_rel + """/gnn_saved_model/):
   about 1.3 MB; excludes entity-ID tables; exposes `encode`, `predict_graph`,
   and `score_embeddings`.
 - [Method, training and CLI commands](../docs/09-inductive-autoencoder.md)
@@ -146,12 +158,12 @@ New entities require an observed neighborhood, not a trained entity-ID row.
 Rebuild this executed notebook from `yago45-kge`:
 ```bash
 .venv/bin/python -m pip install nbformat nbclient ipykernel
-.venv/bin/python scripts/build_inductive_notebook.py
+.venv/bin/python scripts/build_inductive_notebook.py --report """ + report_rel + """
 ```
 """),
 ])
 notebook.metadata.kernelspec = dict(display_name="Python 3", language="python", name="python3")
 NotebookClient(notebook, timeout=120, resources={"metadata": {"path": str(root)}}).execute()
-destination = root / 'notebooks' / '02_inductive_full_results.ipynb'
+destination = root / options.output
 nbf.write(notebook, destination)
 print(destination)

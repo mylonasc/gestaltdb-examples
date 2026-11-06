@@ -21,7 +21,8 @@ yet. It is not an official YAGO release and is not endorsed by the YAGO team.
 
 ## Model and intended use
 
-- Encoder: `tf_gnns` mean-message-passing MPNN, two steps, hidden width 64.
+- Encoder: `tf_gnns` mean-message-passing MPNN, three steps, hidden width 128,
+  with per-step residual connections.
 - Inputs: masked directional relation-count features and observed neighborhoods;
   no learned entity-ID row is required for the GNN.
 - Outputs: normalized 200-dimensional contextual entity vectors.
@@ -44,10 +45,17 @@ facts were excluded, yielding 119,045,262 retained entity–entity facts before
 temporal exclusion, deduplication and splitting.
 
 The prepared graph contains 49,281,921 entities, 63 relations, 96,428,602 training
-facts and 21,783,785 inference-support facts. Training used 20,000 updates with
-128 supervised seeds per update, mixed global/range negatives, and fanouts 8/4.
-This is 0.026548 seed-draw-equivalent epochs, not an exhaustive supervised pass.
-The selected checkpoint is step 18,000, selected using temporal validation only.
+facts and 21,783,785 inference-support facts. Training ran 185,111 updates under a
+strict two-pass entity-coverage schedule (86,927,656 supervised anchor draws;
+every training entity participates as a supervised positive endpoint at least
+twice), with mixed global/range negatives and fanouts 8/4/2. Batch size migrated
+128 → 512 at step 20,439 and sampling switched to vectorized CSR v3 under an
+audited coverage-preserving migration; a forked 4-worker shared-memory producer
+pool (per-step deterministic batch RNG) was adopted at step 44,631 under a
+second audited migration that preserved the exact anchor schedule. The exported
+checkpoint is the final step 185,111 (coverage-complete; validation-best step
+185,000 is retained separately). Temporal validation guided checkpoint retention
+only, never the coverage schedule.
 
 ## Evaluation and limitations
 
@@ -56,15 +64,15 @@ pessimistic model ties. These are **not full-ranking results**.
 
 | Inductive candidates | MRR | Hits@1 | Hits@10 | Frequency MRR (expected ties) |
 |---|---:|---:|---:|---:|
-| Uniform | 0.978552 | 0.9690 | 0.9935 | 0.964589 |
-| Relation-range | 0.864089 | 0.7995 | 0.9700 | 0.776395 |
+| Uniform | 0.974023 | 0.9605 | 0.9980 | 0.964812 |
+| Relation-range | 0.886853 | 0.8255 | 0.9845 | 0.779454 |
 
-No-message range MRR is 0.794412. Paired message-passing gain is 0.069676,
-with a bootstrap 95% interval [0.060645, 0.079703]. Strong degree/frequency
+No-message range MRR is 0.675571. Paired message-passing gain is 0.211282,
+with a bootstrap 95% interval [0.195097, 0.226602]. Strong degree/frequency
 shortcuts mean high sampled MRR is not evidence of general semantic reasoning.
 
-Temporal test MRR is 0.798401 (uniform) and 0.459147 (range), versus frequency
-0.837688 and 0.391728. The uniform temporal result underperforms its control.
+Temporal test MRR is 0.859868 (uniform) and 0.582621 (range), versus frequency
+0.838928 and 0.387878. Both test policies beat their controls here.
 Dates represent earliest annotated triple-validity starts: training through
 2010, validation 2011–2018, test 2019–2024. Undated static background remains;
 this is **valid-time completion, not causal knowledge-acquisition forecasting**.

@@ -46,14 +46,14 @@ All Turtle members were streamed without edge/line caps; literals/text excluded.
 deduplication and independent entity/edge splits. Prepared context contains
 96,428,602 training and 21,783,785 inference-support facts, over 63 relations.
 
-The GNN uses masked directional relation-count features, a two-step `tf_gnns`
-MPNN, and a contextual ComplEx decoder. It was trained for 20,000 updates
-(2.56M supervised seed draws; not an exhaustive supervised pass). The selected
-checkpoint is step 18,000 using temporal validation only.
+The GNN uses masked directional relation-count features, a three-step `tf_gnns`
+MPNN (hidden width 128), and a contextual ComplEx decoder. It was trained for
+185,111 updates under strict two-pass entity coverage (86,927,656 supervised
+anchor draws). The exported checkpoint is the coverage-complete final step.
 
 Before caching, **all held-out queries and same-relation reverse copies were
 globally removed** from context and degree features. Vectors were generated
-with fanouts 8/4 in batches of 2,048 and stored as float16. The cache covers
+with fanouts 8/4/2 in batches of 2,048 and stored as float16. The cache covers
 every mapped entity, including entities with no trained shallow ID row.
 
 ## Separate cached-vector evaluation
@@ -63,9 +63,9 @@ negatives, pessimistic model ties. Not full-ranking metrics.
 
 | Candidates | MRR | Hits@1 | Hits@10 | Mean candidates | Frequency MRR (expected ties) |
 |---|---:|---:|---:|---:|---:|
-| Uniform | 0.978666 | 0.9700 | 0.9935 | 51.000 | 0.967879 |
-| Relation-range | 0.856800 | 0.7880 | 0.9715 | 49.528 | 0.779899 |
-| Degree-matched | 0.475923 | 0.3075 | 0.8315 | 30.712 | 0.311573 |
+| Uniform | 0.977372 | 0.9660 | 0.9980 | 51.000 | 0.967879 |
+| Relation-range | 0.887115 | 0.8270 | 0.9845 | 49.528 | 0.779899 |
+| Degree-matched | 0.572603 | 0.4225 | 0.8895 | 30.712 | 0.311573 |
 
 Static batched contexts, float16 storage and the globally scrubbed graph differ
 from per-query float32 GNN evaluation. These results are separate measurements,

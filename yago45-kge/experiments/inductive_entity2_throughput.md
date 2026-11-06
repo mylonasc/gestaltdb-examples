@@ -83,6 +83,62 @@ The target remains **86,927,656 anchor draws**, covering every training entity
 at least twice, with held-out entities excluded. The migrated run ends at
 **185,111 total updates**, instead of the original batch-128 budget of 679,124.
 
+## Batch-generation parallelism and GestaltDB features
+
+The live run already uses GestaltDB's compact `CSRAdjacency`/`build_csr`
+snapshot. We measured whether a fuller GestaltDB path or parallel producers
+would create batches faster. These tests used the live snapshot at batch 512,
+with the same positives, filtered negatives, masked 8/4/2 neighborhoods and
+features. They are **generation-only** unless stated otherwise.
+
+| Variant | ms/batch | batches/s |
+|---|---:|---:|
+| mmap CSR, sequential | 127.7 | 7.83 |
+| RAM-resident CSR, sequential | 126.2 | 7.93 |
+| Sequential + synthetic 46 ms GPU update | 173.6 | 5.76 |
+| Thread prefetch=2 + 46 ms consumer | 137.2 | 7.29 |
+| Thread prefetch=4 + 46 ms consumer | 131.3 | 7.62 |
+| 2 forked producer processes | 67.0 | 14.93 |
+| 4 forked producer processes | 39.6 | 25.28 |
+| 8 forked producer processes | 26.6 | 37.65 |
+
+**Loading the CSR into RAM is not the answer.** Resident and mmap arrays are
+within noise because the 2.2 GB snapshot is already in the page cache. The cost
+is CPU frontier construction, deduplication, masking and feature assembly, not
+disk access.
+
+**GestaltDB's own `SamplerEngine.sample_subgraph`/`sample_layers` is not faster
+for this recipe.** It iterates rows in Python and materializes sets of global
+node/edge IDs; it also does not implement the custom supervised-positive masking
+used here. The useful primitives are the array-native snapshot, `AsyncBatchFeeder`,
+`worker_engine` and deterministic `split_seed`.
+
+**What does help is overlap and process parallelism.** `AsyncBatchFeeder` is a
+bounded background producer thread: it reduces a 173.6 ms sequential
+prepare+update cycle to 137.2 ms (1.27×). Forked producer processes scale
+generation to 14.9/25.3/37.7 batches/s with 2/4/8 workers. Since the synchronized
+model update is 46 ms, batch 512 has a **21.7 updates/s ceiling**; four workers
+already exceed it, and eight overproduce. A prepared batch pickles to 31.4 MiB
+(11.1 ms dump, 1.8 ms load), so a real multi-process trainer needs shared
+memory or parent-side feature assembly. With that overhead controlled, the
+projected end-to-end rate is roughly **15–18 updates/s**, not the 25/s
+generation rate. These are projections; no parallel-training run has been
+measured.
+
+**Not applied to the running experiment.** The live run remains at ~5.4
+updates/s and ~2,780 anchors/s. Switching it to prefetch or a producer pool
+would require another explicit migration plus RNG/checkpoint semantics (the
+producer advances the sampling RNG ahead of the consumed optimizer step).
+That is deferred rather than silently mixed into the current two-pass run.
+
+GestaltDB exposes no CUDA/GPU-resident sampler; its Torch/PyG/DGL support is
+output conversion only. Keeping the GPU busier therefore means feeding its CPU
+preparation from multiple workers, not moving graph sampling onto the GPU.
+
+Evidence: [scaling benchmark](inductive_entity2_scaling/benchmark.json),
+[raw output](inductive_entity2_scaling/output.log) and
+[script](inductive_entity2_scaling/bench_batch_scaling.py).
+
 ## Evidence and benchmark caveats
 
 - [Initial 128/256 timings](inductive_entity2_profile_baseline/benchmark.json)
@@ -100,7 +156,9 @@ now restores once per process. The isolated 512 run and later complete sweeps
 succeeded. Multi-size sweeps retain ephemeral in-memory optimizer updates
 between sizes; their losses are **not** model-quality comparisons. Hardware
 allocator peaks exclude display/other-process GPU memory. No held-out test
-metrics were used to select throughput settings.
+metrics were used to select throughput settings. The scaling test ran while the
+real trainer was active, so its wall-clock rates include normal CPU contention;
+fork-pool numbers exclude IPC and TensorFlow tensor conversion.
 
 Resume the migrated experiment with:
 

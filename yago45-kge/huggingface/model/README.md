@@ -82,7 +82,7 @@ this is **valid-time completion, not causal knowledge-acquisition forecasting**.
 - Embedding dataset: https://huggingface.co/datasets/mylonasc/yago45-inductive-embeddings
 - Code and executed notebook with t-SNE/loss curves:
   https://github.com/mylonasc/gestaltdb-examples/tree/main/yago45-kge
-- Reproducible results milestone: Git commit `139eb02` in that repository.
+- Reproducible results milestone: Git commit bfc5ad9 in that repository.
 
 ## License and attribution
 

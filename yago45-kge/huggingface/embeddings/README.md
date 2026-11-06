@@ -111,6 +111,6 @@ Code, source manifest, metadata, raw evaluation evidence and an executed
 notebook with embedded t-SNE and loss figures:
 https://github.com/mylonasc/gestaltdb-examples/tree/main/yago45-kge
 
-Results milestone: Git commit `139eb02`. Validity dates used in training do not
+Results milestone: Git commit bfc5ad9. Validity dates used in training do not
 establish acquisition time; undated static background remains available. No
 causal forecasting claim is made.

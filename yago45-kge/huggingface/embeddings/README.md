@@ -16,16 +16,18 @@ size_categories:
 A complete static cache of **49,281,921 × 200 float16 GNN entity vectors**
 generated using an independently trained inductive YAGO graph autoencoder.
 
-**Repository status:** private release preparation. Documentation and licensing
-notices only; the embedding matrix and entity mapping are not uploaded yet.
-This is not an official YAGO release and is not endorsed by the YAGO team.
+**Repository status:** private release. This is not an official YAGO release
+and is not endorsed by the YAGO team.
 
-## Planned contents and usage
+## Contents and usage
 
-- Memory-mappable entity-vector matrix: 19,712,768,528 bytes including NPY header
-  (about 19.7 GB); all values verified finite.
-- Entity-to-row mapping, relation mapping, cache metadata, and checksums.
-- Separate evaluation results and reproduction instructions.
+- `gnn_embeddings.npy`: memory-mappable entity-vector matrix,
+  19,712,768,528 bytes including NPY header (about 19.7 GB); all values
+  verified finite.
+- `node_mapping.parquet`: entity-to-row mapping (`node_id`, `node_int`).
+- `relation_ids.json`: the 63 relation IDs in decoder index order.
+- `cache.json`: cache manifest and provenance; `cached_link_prediction.json`:
+  separate cached-vector evaluation results.
 
 These are **200-dimensional GNN vectors**, not the independent 32-dimensional
 shallow ComplEx embeddings. Row order must be interpreted using the supplied

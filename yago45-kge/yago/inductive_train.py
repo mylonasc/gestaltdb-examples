@@ -15,6 +15,7 @@ from .inductive_data import GraphKnownObjects, NeighborhoodGraph, file_digest, m
 from .inductive_eval import evaluate
 from .inductive_model import InductiveAutoencoder, infonce
 from .inductive_batch import prepare_batch
+from .inductive_parallel import BATCH_RNG
 
 
 def reconcile_completed_step(completed, *optimizer_steps):
@@ -24,6 +25,18 @@ def reconcile_completed_step(completed, *optimizer_steps):
     if all(value == completed + 1 for value in optimizer_steps):
         return completed + 1
     raise ValueError(f"inconsistent checkpoint: completed={completed}, optimizer steps={optimizer_steps}")
+
+
+def latest_checkpoint_step(directory: Path):
+    """Read the latest checkpoint number without initializing TensorFlow/CUDA."""
+    state = directory / "checkpoint"
+    if state.exists():
+        for line in state.read_text().splitlines():
+            if line.startswith("model_checkpoint_path:"):
+                name = line.split('"')[1]
+                return int(name.rsplit("-", 1)[1])
+    indices = list(directory.glob("ckpt-*.index"))
+    return max((int(path.name.rsplit("-", 1)[1].split(".")[0]) for path in indices), default=None)
 
 
 def main():
@@ -76,6 +89,14 @@ def main():
     parser.add_argument("--profile-output", type=Path, default=None)
     parser.add_argument("--profile-sampling-version", choices=[2, 3], type=int, default=None,
                         help="Benchmark a sampler without changing the run recipe")
+    parser.add_argument("--prefetch-workers", type=int, default=0,
+                        help="Forked shared-memory batch producers (0 disables)")
+    parser.add_argument("--prefetch-slots", type=int, default=None,
+                        help="Shared-memory batch slots; defaults to twice the workers")
+    parser.add_argument("--prefetch-max-nodes", type=int, default=1_048_576,
+                        help="Capacity guard per shared-memory slot (pages are lazy)")
+    parser.add_argument("--prefetch-max-edges", type=int, default=2_097_152,
+                        help="Capacity guard per shared-memory slot (pages are lazy)")
     args = parser.parse_args()
     if args.profile_batches is not None:
         if (not args.resume or args.profile_output is None or min(args.profile_batches) < 1
@@ -85,6 +106,14 @@ def main():
         parser.error("--profile-sampling-version requires --profile-batches")
     if (args.resume_batch_size is not None or args.upgrade_sampler) and (not args.resume or args.profile_batches):
         parser.error("performance migration requires --resume and cannot be combined with profiling")
+    if args.prefetch_workers < 0:
+        parser.error("--prefetch-workers cannot be negative")
+    if args.prefetch_workers and args.profile_batches is not None:
+        parser.error("--prefetch-workers cannot be combined with profiling")
+    if args.prefetch_slots is not None and args.prefetch_slots < max(2, 2 * args.prefetch_workers):
+        parser.error("--prefetch-slots must be at least twice --prefetch-workers")
+    if (args.prefetch_max_nodes < 1 or args.prefetch_max_edges < 1):
+        parser.error("prefetch buffer capacities must be positive")
     phases = None
     migration_step = None
     if args.resume and (args.run_dir / "run.json").exists():
@@ -95,16 +124,16 @@ def main():
                 parser.error("batch migration requires positive batch size and an entity-coverage run")
             if args.resume_batch_size != prior["batch_size"]:
                 from .inductive_schedule import EntityCoverageSchedule
-                source = tf.train.latest_checkpoint(str(args.run_dir / "checkpoints"))
+                source = latest_checkpoint_step(args.run_dir / "checkpoints")
                 if source is None:
                     parser.error("batch migration needs a complete checkpoint")
-                migration_step = int(Path(source).name.rsplit("-", 1)[1])
+                migration_step = int(source)
                 old_schedule = EntityCoverageSchedule(prior["model"]["num_train_nodes"], prior["batch_size"],
                     prior["entity_passes"], prior["seed"], phases=phases)
                 draws = old_schedule.progress(migration_step)["supervised_anchor_draws"]
                 phases = [phase for phase in old_schedule.phases if phase["start_step"] < migration_step] + [dict(start_step=migration_step,
                     start_anchor_draws=draws, batch_size=args.resume_batch_size)]
-            args.batch_size = args.resume_batch_size
+                args.batch_size = args.resume_batch_size
     if args.entity_passes < 0:
         parser.error("--entity-passes cannot be negative")
     export_checkpoint = args.export_checkpoint or ("latest" if args.entity_passes else "best")
@@ -112,12 +141,6 @@ def main():
     if sampling_version is None and args.resume and (args.run_dir / "run.json").exists():
         sampling_version = json.loads((args.run_dir / "run.json").read_text()).get("sampling_version", 1)
     sampling_version = 2 if sampling_version is None else sampling_version
-    gpus = tf.config.list_physical_devices("GPU")
-    if args.require_gpu and not gpus:
-        parser.error("GPU required but TensorFlow cannot see one; run via scripts/inductive.sh")
-    for gpu in gpus:
-        tf.config.experimental.set_memory_growth(gpu, True)
-    print(f"TensorFlow devices: {gpus}", flush=True)
     if (min(args.steps, args.batch_size, args.negatives, args.checkpoint_every, args.eval_every,
             args.eval_triples, args.keep_checkpoints, args.dim, args.hidden_dim, *args.fanouts) <= 0
             or args.temperature <= 0 or args.learning_rate <= 0 or args.shallow_weight <= 0):
@@ -168,6 +191,12 @@ def main():
                     positive_schedule="entity-affine-v1" if schedule else "random-facts")
     if phases is not None:
         spec["coverage_phases"] = phases
+    if args.prefetch_workers:
+        spec.update(prefetch_workers=args.prefetch_workers,
+                    prefetch_slots=args.prefetch_slots or 2 * args.prefetch_workers,
+                    prefetch_max_nodes=args.prefetch_max_nodes,
+                    prefetch_max_edges=args.prefetch_max_edges,
+                    batch_rng=BATCH_RNG)
     args.run_dir.mkdir(parents=True, exist_ok=True)
     config_path = args.run_dir / "run.json"
     migration = None
@@ -193,13 +222,62 @@ def main():
                     allowed["coverage_phases"] = phases
             if args.upgrade_sampler and saved["sampling_version"] == 2 and sampling_version == 3:
                 allowed["sampling_version"] = 3
+            if args.prefetch_workers:
+                allowed["prefetch_workers"] = args.prefetch_workers
+                allowed["prefetch_slots"] = args.prefetch_slots or 2 * args.prefetch_workers
+                allowed["prefetch_max_nodes"] = args.prefetch_max_nodes
+                allowed["prefetch_max_edges"] = args.prefetch_max_edges
+                allowed["batch_rng"] = BATCH_RNG
             if allowed != spec:
                 parser.error("resume configuration/dataset differs; reuse the original training arguments")
-            migration = dict(previous_recipe=saved, new_recipe=spec)
+            migration = dict(previous_recipe=saved, new_recipe=spec,
+                             reason="explicit throughput migration; preserve optimizer weights and all scheduled entity anchors",
+                             batch_rng=BATCH_RNG if args.prefetch_workers else saved.get("batch_rng"))
     elif config_path.exists() or any(args.run_dir.iterdir()):
         parser.error("run directory is not empty; use --resume or a new directory")
     else:
         config_path.write_text(json.dumps(spec, indent=2))
+
+    # Build the read-only training graph before TensorFlow initializes CUDA.
+    # Forked producers inherit these pages copy-on-write; see inductive_parallel.
+    context = NeighborhoodGraph(train, num_nodes, num_relations,
+                                snapshot_path=args.run_dir / "snapshots" / "train" if args.sampler.startswith("gestaltdb") else None,
+                                feature_mode=args.feature_mode, compact=args.sampler == "gestaltdb-csr",
+                                sampling_version=sampling_version)
+    if args.profile_sampling_version is not None:
+        context.sampling_version = args.profile_sampling_version
+    if schedule is not None:
+        schedule.validate_graph(context)
+    # Training negatives are filtered against TRAIN ONLY; no test/support access.
+    training_known = GraphKnownObjects(context)
+    validation_known = GraphKnownObjects(context, data["valid"], data[args.validation_split])
+    relation_pools = {int(r): np.unique(train[train[:, 1] == r, 2]) for r in np.unique(train[:, 1])}
+
+    producer_pool = None
+    if args.prefetch_workers and args.profile_batches is None:
+        from .inductive_parallel import BatchProducerPool
+        producer_pool = BatchProducerPool(
+            context=context, training_known=training_known, relation_pools=relation_pools,
+            num_train_nodes=num_train_nodes, schedule=schedule,
+            batch_size=args.batch_size, negatives=args.negatives,
+            negative_policy=args.negative_policy, fanouts=args.fanouts, seed=args.seed,
+            end_step=args.steps, workers=args.prefetch_workers,
+            slots=args.prefetch_slots, max_nodes=args.prefetch_max_nodes,
+            max_edges=args.prefetch_max_edges,
+        )
+        producer_pool.start()
+        print(f"batch producers: {args.prefetch_workers} fork workers, "
+              f"{producer_pool.slots} shared slots, {BATCH_RNG}", flush=True)
+
+    gpus = tf.config.list_physical_devices("GPU")
+    if args.require_gpu and not gpus:
+        if producer_pool is not None:
+            producer_pool.close()
+        parser.error("GPU required but TensorFlow cannot see one; run via scripts/inductive.sh")
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+    print(f"TensorFlow devices: {gpus}", flush=True)
+
     versions = {name: importlib.metadata.version(name) for name in ("tensorflow", "keras", "gestaltdb", "tf_gnns", "numpy")}
     if args.profile_batches is None:
         (args.run_dir / "environment.json").write_text(json.dumps(dict(versions=versions, gpus=[str(g) for g in gpus]), indent=2))
@@ -247,12 +325,19 @@ def main():
         if restored_steps != int(step.numpy()):
             print(f"reconciled legacy interrupted step counter to completed optimizer step {restored_steps}", flush=True)
             step.assign(restored_steps)
-        rng.bit_generator.state = json.loads(rng_state.numpy().decode())
+        if producer_pool is None:
+            rng.bit_generator.state = json.loads(rng_state.numpy().decode())
+        else:
+            print(f"batch RNG: {BATCH_RNG}; legacy sequential state is not reused", flush=True)
         if migration is not None:
             if migration_step is not None and int(step.numpy()) != migration_step:
                 parser.error("migration step differs from completed optimizer step")
+            reason = "explicit throughput migration; preserve optimizer weights and all scheduled entity anchors"
+            if args.prefetch_workers:
+                reason += (f"; batch RNG {BATCH_RNG} with {args.prefetch_workers} "
+                           "forked shared-memory producers")
             migration.update(checkpoint=manager.latest_checkpoint, completed_step=int(step.numpy()),
-                             reason="explicit throughput migration; preserve optimizer weights and all scheduled entity anchors")
+                             reason=reason)
             (args.run_dir / f"performance_migration_{int(step.numpy())}.json").write_text(json.dumps(migration, indent=2))
             temporary = config_path.with_suffix(".tmp")
             temporary.write_text(json.dumps(spec, indent=2))
@@ -274,19 +359,6 @@ def main():
                 curves.append(row)
     if args.profile_batches is None:
         curves_path.write_text("".join(json.dumps(row) + "\n" for row in curves))
-
-    context = NeighborhoodGraph(train, num_nodes, num_relations,
-                                snapshot_path=args.run_dir / "snapshots" / "train" if args.sampler.startswith("gestaltdb") else None,
-                                feature_mode=args.feature_mode, compact=args.sampler == "gestaltdb-csr",
-                                sampling_version=sampling_version)
-    if args.profile_sampling_version is not None:
-        context.sampling_version = args.profile_sampling_version
-    if schedule is not None:
-        schedule.validate_graph(context)
-    # Training negatives are filtered against TRAIN ONLY; no test/support access.
-    training_known = GraphKnownObjects(context)
-    validation_known = GraphKnownObjects(context, data["valid"], data[args.validation_split])
-    relation_pools = {int(r): np.unique(train[train[:, 1] == r, 2]) for r in np.unique(train[:, 1])}
 
     graph_signature = dict(features=tf.TensorSpec((None, 2 * num_relations + 1), tf.float32),
                            senders=tf.TensorSpec((None,), tf.int32),
@@ -333,7 +405,8 @@ def main():
         save_coverage(manager.latest_checkpoint)
 
     def save():
-        rng_state.assign(json.dumps(rng.bit_generator.state))
+        rng_state.assign(json.dumps(rng.bit_generator.state) if producer_pool is None
+                         else json.dumps(dict(mode=BATCH_RNG)))
         path = manager.save(checkpoint_number=int(step.numpy()))
         save_coverage(path)
         print(f"saved {path}", flush=True)
@@ -379,6 +452,8 @@ def main():
             except json.JSONDecodeError:
                 continue
         train_log.write_text("".join(json.dumps(row) + "\n" for row in records))
+    if producer_pool is not None:
+        producer_pool.begin(start)
     t0 = time.perf_counter()
     stop_requested = False
 
@@ -396,25 +471,44 @@ def main():
             if stop_requested:
                 save()
                 break
-            arrays, batch_timings = prepare_batch(context, training_known, relation_pools, num_train_nodes,
-                rng=rng, batch_size=args.batch_size, negatives=args.negatives,
-                negative_policy=args.negative_policy, fanouts=args.fanouts,
-                schedule=schedule, completed_steps=current - 1)
-            graph, positive_local, negative_local, positive, negative = arrays
-            losses = update({k: tf.convert_to_tensor(v) for k, v in graph.items()},
-                            positive_local, negative_local, positive, negative)
+            produced = None
+            values = None
+            if producer_pool is None:
+                arrays, batch_timings = prepare_batch(context, training_known, relation_pools, num_train_nodes,
+                    rng=rng, batch_size=args.batch_size, negatives=args.negatives,
+                    negative_policy=args.negative_policy, fanouts=args.fanouts,
+                    schedule=schedule, completed_steps=current - 1)
+                graph, positive_local, negative_local, positive, negative = arrays
+                losses = update({k: tf.convert_to_tensor(v) for k, v in graph.items()},
+                                positive_local, negative_local, positive, negative)
+            else:
+                produced = producer_pool.get(current - 1)
+                try:
+                    completed, graph, positive_local, negative_local, positive, negative = producer_pool.read(produced)
+                    if completed != current - 1:
+                        raise RuntimeError(f"producer returned step {completed}, expected {current - 1}")
+                    losses = update({k: tf.convert_to_tensor(v) for k, v in graph.items()},
+                                    positive_local, negative_local, positive, negative)
+                    # The shared slot cannot be recycled until the device copy
+                    # and optimizer update have completed.
+                    values = tuple(float(loss) for loss in losses)
+                finally:
+                    producer_pool.release(produced)
+                    produced = None
             step.assign(current)
             if current % 50 == 0 or current == start + 1:
+                if values is None:
+                    values = tuple(float(loss) for loss in losses)
                 elapsed = time.perf_counter() - t0
-                row = dict(step=current, loss=float(losses[0]), gnn_loss=float(losses[1]),
-                           shallow_loss=float(losses[2]), elapsed_seconds=elapsed,
+                row = dict(step=current, loss=values[0], gnn_loss=values[1],
+                           shallow_loss=values[2], elapsed_seconds=elapsed,
                             steps_per_second=(current - start) / max(elapsed, 1e-9))
                 if schedule is not None:
                     row["coverage"] = schedule.progress(current)
                 with train_log.open("a") as handle:
                     handle.write(json.dumps(row) + "\n")
-                print(f"step={current} loss={float(losses[0]):.4f} "
-                      f"gnn={float(losses[1]):.4f} shallow={float(losses[2]):.4f} "
+                print(f"step={current} loss={values[0]:.4f} "
+                      f"gnn={values[1]:.4f} shallow={values[2]:.4f} "
                       f"steps/s={row['steps_per_second']:.2f}", flush=True)
             if current % args.checkpoint_every == 0 or current == args.steps or stop_requested:
                 save()  # checkpoint BEFORE potentially expensive evaluation/export
@@ -429,6 +523,8 @@ def main():
     finally:
         for signum, previous in previous_handlers.items():
             signal.signal(signum, previous)
+        if producer_pool is not None:
+            producer_pool.close()
 
     if stop_requested:
         print(f"stopped after checkpointing complete step {int(step.numpy())}; resume with --resume", flush=True)

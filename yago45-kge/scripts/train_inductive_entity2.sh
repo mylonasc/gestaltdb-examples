@@ -12,4 +12,8 @@ exec bash "${ROOT_DIR}/scripts/inductive.sh" train \
   --feature-mode full --sampler gestaltdb-csr --embedding-device cpu \
   --shallow-optimizer sparse-adagrad --shallow-learning-rate 0.05 \
   --keep-checkpoints 1 --checkpoint-every 5000 --eval-every 5000 \
-  --eval-triples 300 --export-checkpoint latest --require-gpu "$@"
+  --eval-triples 300 --export-checkpoint latest --require-gpu \
+  --prefetch-workers 4 --prefetch-slots 8 "$@"
+# Prefetch uses 4 forked shared-memory producers (per-step-seed-v1 RNG).
+# Profiling commands must explicitly disable it, e.g. --prefetch-workers 0,
+# because --prefetch-workers cannot be combined with --profile-batches.

@@ -65,10 +65,22 @@ def test_entity_id_namespaces_do_not_collide():
         factory.file("README.md"),
         factory.snapshot("a" * 40, "README.md"),
         factory.blob("b" * 40),
+        factory.content("b" * 40, "markdown"),
         factory.work_item("github", 10),
         factory.topic("Benchmarking"),
     }
-    assert len(identifiers) == 7
+    assert len(identifiers) == 8
+
+
+def test_content_ids_are_qualified_by_oid_and_kind():
+    factory = IdFactory("https://github.com/mylonasc/tf_gnns")
+    other = IdFactory("https://github.com/mylonasc/other")
+    oid = "A" * 40
+    markdown = factory.content(oid, "markdown")
+    assert markdown == factory.content(oid.lower(), "markdown")
+    assert markdown != factory.content(oid, "python")
+    assert markdown != other.content(oid, "markdown")
+    assert markdown.startswith("content:")
 
 
 def test_topic_identity_ignores_case_and_whitespace():

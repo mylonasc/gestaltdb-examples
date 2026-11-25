@@ -104,6 +104,15 @@ class GitSettings(FrozenModel):
         return self
 
 
+class ContentSettings(FrozenModel):
+    """Bounded text and structure limits for content extraction."""
+
+    max_file_bytes: int = Field(default=2 * 1024 * 1024, ge=1_024)
+    max_sections: int = Field(default=500, ge=1, le=10_000)
+    max_symbols: int = Field(default=1_000, ge=1, le=10_000)
+    max_imports: int = Field(default=500, ge=1, le=10_000)
+
+
 class LLMSettings(FrozenModel):
     enabled: bool = False
     provider: str = "openai"
@@ -117,6 +126,7 @@ class RuntimeConfig(FrozenModel):
     repository: RepositorySpec
     budgets: Budgets = Field(default_factory=Budgets)
     git: GitSettings = Field(default_factory=GitSettings)
+    content: ContentSettings = Field(default_factory=ContentSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     data_root: str = "data"
     cache_dir: str = "data/cache"

@@ -216,6 +216,17 @@ class GitHistory:
             return False
         return True
 
+    def read_blob(self, oid: str) -> bytes | None:
+        """Return raw blob bytes, or ``None`` when the object is unavailable."""
+
+        try:
+            blob = self.repository[oid]
+        except KeyError:
+            return None
+        if not isinstance(blob, pygit2.Blob):
+            return None
+        return blob.data
+
     def fetch(self, *, depth: int, remote: str = "origin") -> None:
         """Fetch all branches to a bounded depth using libgit2 only."""
 

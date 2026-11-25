@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from repo_history.models import (
     Budgets,
+    ContentSettings,
     CoverageGap,
     CoverageStatus,
     LLMSettings,
@@ -95,6 +96,18 @@ def test_runtime_config_defaults_to_offline_safe_import():
     assert config.llm.enabled is False
     assert config.data_root == "data"
     assert config.git.max_depth == 256
+
+
+def test_content_settings_defaults_are_bounded():
+    settings = ContentSettings()
+    assert settings.max_file_bytes == 2 * 1024 * 1024
+    assert settings.max_sections == 500
+    assert settings.max_symbols == 1_000
+    assert settings.max_imports == 500
+    with pytest.raises(ValidationError):
+        ContentSettings(max_file_bytes=0)
+    with pytest.raises(ValidationError):
+        ContentSettings(max_sections=10_001)
 
 
 def test_coverage_gap_is_immutable_and_typed():

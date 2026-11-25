@@ -56,6 +56,9 @@ class IdFactory:
     def blob(self, content_hash: str) -> str:
         return stable_id("blob", content_hash.lower())
 
+    def content(self, oid: str, kind: str) -> str:
+        return stable_id("content", self.repository_id, oid.lower(), kind)
+
     def change(self, commit_sha: str, parent_sha: str | None, path: str) -> str:
         return stable_id("change", self.repository_id, commit_sha.lower(), parent_sha or "root", path)
 

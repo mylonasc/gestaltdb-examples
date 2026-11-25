@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from repo_history.config import DEFAULT_CONFIG, config_fingerprint, load_config
-from repo_history.models import GitSettings, RuntimeConfig
+from repo_history.models import ContentSettings, GitSettings, RuntimeConfig
 
 
 def test_sample_config_expresses_the_pinned_slice():
@@ -48,6 +48,25 @@ def test_git_settings_reject_inverted_fetch_depths():
         GitSettings(max_depth=0)
     with pytest.raises(ValidationError):
         GitSettings(rename_threshold=101)
+
+
+def test_content_settings_are_loaded_from_toml():
+    config = load_config()
+    assert config.content.max_file_bytes == 2097152
+    assert config.content.max_sections == 500
+    assert config.content.max_symbols == 1000
+    assert config.content.max_imports == 500
+
+
+def test_content_settings_reject_invalid_limits():
+    with pytest.raises(ValidationError):
+        ContentSettings(max_file_bytes=1)
+    with pytest.raises(ValidationError):
+        ContentSettings(max_sections=0)
+    with pytest.raises(ValidationError):
+        ContentSettings(max_symbols=10_001)
+    with pytest.raises(ValidationError):
+        ContentSettings(max_imports=0)
 
 
 def test_fingerprint_is_stable_and_sensitive(tmp_path):

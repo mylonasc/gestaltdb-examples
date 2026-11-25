@@ -17,6 +17,13 @@ from repo_history.config import load_config
 from repo_history.content import ContentExtractor
 from repo_history.git import GitHistory
 from repo_history.github import EvidenceCache, GitHubCredentials, GitHubDiscoverer
+from repo_history.graph import (
+    PARENT_COMMIT,
+    TIP_OF,
+    TOUCHES,
+    map_git_index,
+    map_topic_assignments,
+)
 from repo_history.ids import IdFactory
 from repo_history.labeling import (
     DeterministicLabeler,
@@ -146,9 +153,11 @@ def main() -> None:
     links = [*text_report.links, *provider_report.links, *topic_report.links]
 
     data = build_viewer_data(
-        index=index, discovery=discovery, content=content, links=links,
+        index=index, discovery=discovery, content=content,
+        links=[*text_report.links, *provider_report.links, *topic_report.links],
         assignments=assignments, info_horizon=now, run_id=RUN_ID,
         repository_url=repo_url,
+        max_nodes=400,
         branch_names={
             ids.branch(pull.head_ref): pull.head_ref
             for pull in discovery.pull_requests if pull.head_ref
@@ -156,6 +165,11 @@ def main() -> None:
             ids.branch(pull.base_ref): pull.base_ref
             for pull in discovery.pull_requests if pull.base_ref
         },
+        extra_edges=[
+            *(r for r in map_git_index(index, ids, run_id=RUN_ID).relationships
+              if r.edge_type in (PARENT_COMMIT, TIP_OF, TOUCHES)),
+            *map_topic_assignments(assignments, ids, run_id=RUN_ID).relationships,
+        ],
     )
     (HERE / "graph.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
     (HERE / "viewer.html").write_text(

@@ -18,8 +18,9 @@ versions that supersede earlier ones; old evidence is never rewritten.
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -34,10 +35,12 @@ from gestaltdb.graphdb import (
 from .git import GitIndex
 from .github import GitHubDiscovery
 from .ids import IdFactory, stable_id
+from .labeling import TopicAssignment, TopicRegistry
 from .models import CoverageGap, CoverageStatus, FrozenModel, GraphSettings, ensure_utc
 from .protocols import GraphSink as GraphSinkProtocol
 
 __all__ = [
+    "ABOUT",
     "CHILD_OF",
     "HAS_LABEL",
     "MEMBER_OF",
@@ -45,6 +48,7 @@ __all__ = [
     "OF_FILE",
     "PARENT_COMMIT",
     "TIP_OF",
+    "TOUCHES",
     "EntityWrite",
     "GraphClosedError",
     "GraphError",
@@ -57,13 +61,17 @@ __all__ = [
     "WriteReport",
     "map_discovery",
     "map_git_index",
+    "map_registry",
+    "map_topic_assignments",
 ]
 
 # Edge types used by typed traversal.  The driver reads the edge type from
 # the ``type`` property, so the sink always sets it.
+ABOUT = "ABOUT"
 PARENT_COMMIT = "PARENT_COMMIT"
 MEMBER_OF = "MEMBER_OF"
 OF_FILE = "OF_FILE"
+TOUCHES = "TOUCHES"
 HAS_LABEL = "HAS_LABEL"
 CHILD_OF = "CHILD_OF"
 TIP_OF = "TIP_OF"
@@ -276,6 +284,28 @@ def map_git_index(
                 run_id=run_id,
                 info_horizon=committed_at,
                 evidence_ids=(),
+            )
+        )
+        # Direct commit-to-file evidence: which files a commit touched.
+        relationships.append(
+            RelationshipWrite(
+                edge_id=stable_id(
+                    "edge", ids.repository_id, TOUCHES, entry.commit_sha, entry.path
+                ),
+                edge_type=TOUCHES,
+                source=ids.commit(entry.commit_sha),
+                target=ids.file(entry.path),
+                properties={},
+                valid_from=committed_at,
+                origin="git",
+                origin_id=f"{entry.commit_sha}:{entry.path}:touches",
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "git-touches",
+                    entry.commit_sha, entry.path,
+                ),
+                run_id=run_id,
+                info_horizon=committed_at,
+                evidence_ids=(ids.evidence("git", entry.commit_sha, entry.source_url),),
             )
         )
 
@@ -514,6 +544,96 @@ def map_discovery(
 
     return MappedGraph(
         entities=tuple(entities), relationships=tuple(relationships), skipped=tuple(skipped)
+    )
+
+
+def map_registry(
+    registry: TopicRegistry, ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Map derived topics to ``Topic`` entities with lifecycle provenance."""
+
+    entities: list[EntityWrite] = []
+    for topic in registry.topics:
+        entities.append(
+            EntityWrite(
+                logical_id=topic.topic_id,
+                labels=("Topic",),
+                properties={
+                    "name": topic.name,
+                    "aliases": list(topic.aliases),
+                    "description": topic.description,
+                    "created_by": topic.created_by,
+                    "merged_into": topic.merged_into,
+                    "supersedes": list(topic.supersedes),
+                },
+                valid_from=topic.created_at,
+                origin="labeling",
+                origin_id=topic.topic_id,
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "topic", topic.topic_id
+                ),
+                run_id=run_id,
+                info_horizon=topic.created_at,
+                evidence_ids=(),
+            )
+        )
+    return MappedGraph(entities=tuple(entities))
+
+
+def map_topic_assignments(
+    assignments: Sequence[TopicAssignment], ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Map derived topic assignments to ``ABOUT`` entity-topic edges.
+
+    Subject IDs follow the layers that produced them: snapshot occurrences
+    stay snapshot IDs (the graph holds ``Snapshot`` nodes under those IDs)
+    while ``workitem:github:N`` subjects resolve to ``WorkItem`` nodes.
+    Provider-label preservation assignments carry no topic and are skipped.
+    """
+
+    relationships: list[RelationshipWrite] = []
+    skipped: list[str] = []
+    for assignment in assignments:
+        if assignment.kind != "derived" or assignment.topic_id is None:
+            skipped.append(f"assignment:{assignment.subject_id} has no derived topic")
+            continue
+        match = re.fullmatch(r"workitem:github:(\d+)", assignment.subject_id)
+        source = (
+            ids.work_item("github", int(match.group(1)))
+            if match is not None
+            else assignment.subject_id
+        )
+        horizon = assignment.result.provenance.info_horizon
+        relationships.append(
+            RelationshipWrite(
+                edge_id=stable_id(
+                    "edge", ids.repository_id, ABOUT,
+                    assignment.subject_id, assignment.topic_id,
+                ),
+                edge_type=ABOUT,
+                source=source,
+                target=assignment.topic_id,
+                properties={
+                    "action": assignment.action,
+                    "confidence": assignment.confidence,
+                    "rationale": assignment.rationale,
+                },
+                valid_from=horizon,
+                origin="labeling",
+                origin_id=f"{assignment.subject_id}:{assignment.topic_id}",
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "topic-about",
+                    assignment.subject_id, assignment.topic_id,
+                ),
+                run_id=run_id,
+                info_horizon=horizon,
+                evidence_ids=tuple(
+                    ref.evidence_id for ref in assignment.result.evidence
+                ),
+            )
+        )
+    return MappedGraph(
+        relationships=tuple(relationships), skipped=tuple(skipped)
     )
 
 
@@ -901,13 +1021,15 @@ class GraphSink(GraphSinkProtocol):
             for node in self._db.neighbors_by_edge_type(logical_id, edge_type, direction)
         ]
 
-    def label_counts(self) -> dict[str, int]:
+    def label_counts(self, labels: Sequence[str] | None = None) -> dict[str, int]:
         self._ensure_open("count entities")
         self._ensure_ready()
-        return {
-            label: self._db.count_nodes_by_label(label)
-            for label in ("Commit", "File", "Snapshot", "WorkItem", "ProviderLabel", "Branch")
-        }
+        if labels is None:
+            labels = (
+                "Commit", "File", "Snapshot", "WorkItem", "ProviderLabel", "Branch",
+                "Topic",
+            )
+        return {label: self._db.count_nodes_by_label(label) for label in labels}
 
     def edge_counts(
         self, edge_types: Sequence[str] | None = None
@@ -916,7 +1038,9 @@ class GraphSink(GraphSinkProtocol):
         self._ensure_ready()
         if edge_types is None:
             edge_types = (
-                PARENT_COMMIT, MEMBER_OF, OF_FILE, HAS_LABEL, CHILD_OF, TIP_OF, MERGED_AS,
+                ABOUT, PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, HAS_LABEL,
+                CHILD_OF, TIP_OF, MERGED_AS, "MENTIONS", "INTENDS_TO_RESOLVE",
+                "CLOSED_BY", "RELATED_TO",
             )
         return {edge_type: self._db.count_edges_by_type(edge_type) for edge_type in edge_types}
 

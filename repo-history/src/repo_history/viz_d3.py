@@ -19,6 +19,7 @@ from typing import Any, Sequence
 from .content import ContentIndex
 from .git import GitIndex
 from .github import GitHubDiscovery
+from .graph import RelationshipWrite
 from .ids import IdFactory
 from .labeling import TopicAssignment
 from .linking import LinkRecord, LinkRelation
@@ -50,12 +51,18 @@ def build_viewer_data(
     repository_url: str,
     max_nodes: int = MAX_VIEWER_NODES,
     branch_names: dict[str, str] | None = None,
+    extra_edges: Sequence[RelationshipWrite] = (),
 ) -> dict[str, Any]:
     """Build a bounded, time-normalized node/edge document for the viewer.
 
     ``branch_names`` maps branch node IDs to ref names for branches that are
     referenced by links but absent from the index (deleted or out of slice);
     they appear as unobserved placeholder nodes instead of dropping the edge.
+    ``extra_edges`` carries indexer writes (structural and ``ABOUT`` edges)
+    that are not ``LinkRecord`` reports; endpoints are canonicalized the same
+    way and edges to dropped nodes are skipped.  ``ABOUT`` edges land on
+    files: snapshot occurrences aggregate to their file for the file-level
+    view (noted in ``meta``).
     """
 
     ids = IdFactory(repository_url)
@@ -138,9 +145,9 @@ def build_viewer_data(
                   "horizon": info_horizon.isoformat()},
         )
 
-    # Links reference subjects by the IDs their own layer uses (snapshot
-    # occurrences, literal ``workitem:github:N`` subjects); canonicalize both
-    # to the graph node IDs so edges join kept nodes.
+    # Links and indexer writes reference subjects by the IDs their own layer
+    # uses (snapshot occurrences, literal ``workitem:github:N`` subjects);
+    # canonicalize both to the graph node IDs so edges join kept nodes.
     canonical_id = {
         snapshot.snapshot_id: ids.file(snapshot.path) for snapshot in content.snapshots
     }
@@ -148,10 +155,14 @@ def build_viewer_data(
         f"workitem:github:{item.number}": ids.work_item("github", item.number)
         for item in discovery.work_items
     })
+
+    def canonical_endpoint(endpoint: str) -> str:
+        return canonical_id.get(endpoint, endpoint)
+
     aggregated: list[LinkRecord] = []
     for link in links:
-        source = canonical_id.get(link.source_id, link.source_id)
-        target = canonical_id.get(link.target_id, link.target_id)
+        source = canonical_endpoint(link.source_id)
+        target = canonical_endpoint(link.target_id)
         if (source, target) == (link.source_id, link.target_id):
             aggregated.append(link)
         else:
@@ -159,15 +170,33 @@ def build_viewer_data(
                 link.model_copy(update={"source_id": source, "target_id": target})
             )
     links = aggregated
+    extra: list[dict[str, Any]] = []
+    for write in extra_edges:
+        source = canonical_endpoint(write.source)
+        target = canonical_endpoint(write.target)
+        extra.append({
+            "source": source,
+            "target": target,
+            "relation": write.edge_type,
+            "inferred": write.edge_type == "RELATED_TO" and write.origin == "linking",
+            "rationale": str(write.properties.get("rationale", write.edge_type)),
+            "evidence": len(write.evidence_ids),
+        })
 
+    path_of_id = {
+        ids.file(snapshot.path): snapshot.path for snapshot in content.snapshots
+    }
     file_targets = {
         link.target_id
         for link in links
         if link.relation in (LinkRelation.MENTIONS, LinkRelation.RELATED_TO)
+        and link.target_id in path_of_id
     }
-    path_of_id = {
-        ids.file(snapshot.path): snapshot.path for snapshot in content.snapshots
-    }
+    for edge in extra:
+        if edge["target"] in path_of_id:
+            file_targets.add(edge["target"])
+        if edge["source"] in path_of_id:
+            file_targets.add(edge["source"])
     file_times: dict[str, list[datetime]] = {}
     for snapshot in content.snapshots:
         moment = commit_times.get(snapshot.commit_sha)
@@ -226,6 +255,10 @@ def build_viewer_data(
         if link.source_id in nodes and link.target_id in nodes:
             degree[link.source_id] = degree.get(link.source_id, 0) + 1
             degree[link.target_id] = degree.get(link.target_id, 0) + 1
+    for edge in extra:
+        if edge["source"] in nodes and edge["target"] in nodes:
+            degree[edge["source"]] = degree.get(edge["source"], 0) + 1
+            degree[edge["target"]] = degree.get(edge["target"], 0) + 1
 
     core_kinds = {"Commit", "WorkItem", "Branch"}
     core = [nid for nid, node in nodes.items() if node["kind"] in core_kinds]
@@ -258,6 +291,9 @@ def build_viewer_data(
         for link in links
         if link.source_id in kept and link.target_id in kept
     ]
+    edges.extend(
+        edge for edge in extra if edge["source"] in kept and edge["target"] in kept
+    )
     kept_nodes = [nodes[nid] for nid in sorted(kept)]
     counts = {"links": len(edges), "omitted": omitted}
     for node in kept_nodes:
@@ -273,6 +309,10 @@ def build_viewer_data(
             "window": {"start": window.start.isoformat(), "end": window.end.isoformat()},
             "counts": counts,
             "max_nodes": max_nodes,
+            "notes": (
+                "Snapshot occurrences aggregate to file nodes; "
+                "MEMBER_OF/OF_FILE snapshot granularity is folded into TOUCHES."
+            ),
         },
     }
 
@@ -378,8 +418,8 @@ const DATA = __DATA__;
   });
 
   const link = g.append('g').selectAll('line').data(DATA.edges).join('line')
-    .attr('stroke', e => e.inferred ? '#9e6a03' : (e.relation === 'PARENT_COMMIT' ? '#8b949e' : '#1f6feb'))
-    .attr('stroke-width', e => e.relation === 'PARENT_COMMIT' ? 1 : 2)
+    .attr('stroke', e => e.inferred ? '#9e6a03' : (['PARENT_COMMIT', 'MEMBER_OF', 'OF_FILE', 'TIP_OF', 'TOUCHES'].includes(e.relation) ? '#8b949e' : '#1f6feb'))
+    .attr('stroke-width', e => ['PARENT_COMMIT', 'TIP_OF', 'TOUCHES'].includes(e.relation) ? 1 : 2)
     .attr('stroke-dasharray', e => e.inferred ? '5,3' : null);
   link.append('title').text(e => e.relation + (e.rationale ? ': ' + e.rationale : ''));
   const node = g.append('g').selectAll('g').data(DATA.nodes).join('g')

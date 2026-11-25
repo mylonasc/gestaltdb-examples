@@ -163,10 +163,13 @@ sink.close()
 ```
 
 `map_git_index` emits `Commit`, `Snapshot`, `File`, and `Branch` entities with
-`PARENT_COMMIT`, `MEMBER_OF`, `OF_FILE`, and `TIP_OF` relationships;
-`map_discovery` emits `WorkItem` and `ProviderLabel` entities with `HAS_LABEL`,
-`CHILD_OF`, and `MERGED_AS` relationships. Out-of-scope parents and hierarchy
-edges are skipped, never invented.
+`PARENT_COMMIT`, `MEMBER_OF`, `OF_FILE`, `TOUCHES` (direct commit-to-file
+evidence), and `TIP_OF` relationships; `map_discovery` emits `WorkItem` and
+`ProviderLabel` entities with `HAS_LABEL`, `CHILD_OF`, and `MERGED_AS`
+relationships; `map_registry` emits `Topic` entities and
+`map_topic_assignments` emits `ABOUT` edges from derived topic assignments
+(provider-label preservation assignments carry no topic and are skipped).
+Out-of-scope parents and hierarchy edges are skipped, never invented.
 
 Version IDs are deterministic UUIDs, so ingesting the same batch twice is
 idempotent: the driver rejects the duplicate ID and the sink skips it after
@@ -336,7 +339,11 @@ omissions reported, and the footer records run, horizon, counts, and gaps.
 `examples/build_viewer.py` exports the live slice to `examples/graph.json`
 and writes `examples/viewer.html`, a self-contained page (D3 loaded from
 CDN, with an offline data-table fallback) with a force-directed layout whose
-x-axis is time:
+x-axis is time. All edge kinds are included — `PARENT_COMMIT`, `TIP_OF`,
+`TOUCHES`, `CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`, `RELATED_TO`
+(provider and inferred), and `ABOUT` (topic assignments; snapshot
+occurrences aggregate to their file, as the page footer notes) — while
+`MEMBER_OF`/`OF_FILE` snapshot granularity stays folded into `TOUCHES`:
 
 - every timestamped node is normalized to `t` in `[0, 1]` across the graph;
   an anchor force pulls every node toward the mid-time center while a second

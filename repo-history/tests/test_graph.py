@@ -27,6 +27,7 @@ from repo_history.github import (
     RevisionAvailability,
 )
 from repo_history.graph import (
+    ABOUT,
     CHILD_OF,
     HAS_LABEL,
     MEMBER_OF,
@@ -34,14 +35,18 @@ from repo_history.graph import (
     OF_FILE,
     PARENT_COMMIT,
     TIP_OF,
+    TOUCHES,
     EntityWrite,
     GraphClosedError,
     GraphError,
     GraphSink,
     map_discovery,
     map_git_index,
+    map_registry,
+    map_topic_assignments,
 )
 from repo_history.ids import IdFactory
+from repo_history.labeling import TopicAssignment, seed_registry
 from repo_history.models import GraphSettings, TimeWindow
 from repo_history.protocols import GraphSink as GraphSinkProtocol
 
@@ -173,6 +178,44 @@ def sink_at(tmp_path, run_id: str = RUN_ID) -> GraphSink:
     )
 
 
+def topic_assignment(
+    subject_id: str,
+    topic_id: str,
+    topic_name: str,
+    *,
+    kind: str = "derived",
+    action: str = "reuse",
+    horizon: datetime = NOW,
+) -> TopicAssignment:
+    from repo_history.analysis import AnalysisResult, DecisionStatus, Provenance
+
+    derived = kind == "derived"
+    return TopicAssignment(
+        subject_id=subject_id,
+        kind=kind,  # type: ignore[arg-type]
+        action=action,  # type: ignore[arg-type]
+        topic_id=topic_id if derived else None,
+        topic_name=topic_name if derived else None,
+        provider_label=None if derived else topic_name,
+        confidence=0.9,
+        rationale="fixture",
+        registry_version=3,
+        result=AnalysisResult.create(
+            subject_id=subject_id,
+            kind="topic",
+            status=DecisionStatus.ACCEPTED,
+            value={"action": action, "topic_id": topic_id},
+            provenance=Provenance(
+                method="deterministic-tfidf-labeler",
+                method_version="1",
+                run_id=RUN_ID,
+                info_horizon=horizon,
+            ),
+            evidence=(),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Mapping
 # ---------------------------------------------------------------------------
@@ -297,6 +340,93 @@ def test_map_discovery_covers_items_labels_hierarchy_and_merges():
 
     assert len(mapped.skipped) == 1
     assert "out of scope" in mapped.skipped[0]
+
+
+def test_map_git_index_adds_direct_commit_file_touches():
+    boundary = commit("b" * 40, committed_at=T0)
+    tip = commit("c" * 40, parents=(boundary.sha,), committed_at=DAY_ONE)
+    mapped = map_git_index(git_index(selection((tip,), (boundary,))), ids(), run_id=RUN_ID)
+
+    touches = [edge for edge in mapped.relationships if edge.edge_type == TOUCHES]
+    assert len(touches) == len(
+        [entry for entry in mapped.entities if "Snapshot" in entry.labels]
+    )
+    assert {(edge.source, edge.target) for edge in touches} == {
+        (ids().commit("c" * 40), ids().file("x.py")),
+        (ids().commit("b" * 40), ids().file("x.py")),
+    }
+    assert all(edge.valid_from in (T0, DAY_ONE) for edge in touches)
+    assert all(edge.evidence_ids for edge in touches)
+
+
+def test_map_registry_and_assignments_cover_topics_and_about_edges():
+    registry = seed_registry(at=NOW)
+    registry, first = registry.register(
+        "sparse-training", at=NOW, created_by="test", ids=ids(),
+        description="sparse training graphs",
+    )
+    registry, second = registry.register(
+        "graph-convolution", at=NOW, created_by="test", ids=ids()
+    )
+    merged_registry, merged = registry.merge(
+        [first.topic_id, second.topic_id], "graph-learning",
+        at=NOW, created_by="test", ids=ids(),
+    )
+
+    mapped = map_registry(merged_registry, ids(), run_id=RUN_ID)
+
+    by_id = {entity.logical_id: entity for entity in mapped.entities}
+    assert set(by_id) == {first.topic_id, second.topic_id, merged.topic_id}
+    assert all(entity.labels == ("Topic",) for entity in by_id.values())
+    assert by_id[first.topic_id].properties["merged_into"] == merged.topic_id
+    assert by_id[merged.topic_id].properties["description"].startswith("sparse")
+    assert by_id[merged.topic_id].properties["supersedes"] == sorted(
+        [first.topic_id, second.topic_id]
+    )
+
+    assignments = [
+        topic_assignment("snap:guide", first.topic_id, "sparse-training"),
+        topic_assignment("workitem:github:10", merged.topic_id, "graph-learning"),
+        topic_assignment("workitem:github:10", "bug", "bug", kind="provider", action="preserve"),
+    ]
+    linked = map_topic_assignments(assignments, ids(), run_id=RUN_ID)
+
+    assert len(linked.relationships) == 2
+    assert {edge.edge_type for edge in linked.relationships} == {ABOUT}
+    by_source = {edge.source: edge for edge in linked.relationships}
+    assert by_source["snap:guide"].target == first.topic_id
+    assert by_source[ids().work_item("github", 10)].target == merged.topic_id
+    assert all(edge.run_id == RUN_ID for edge in linked.relationships)
+    assert "no derived topic" in linked.skipped[0]
+
+
+def test_about_and_touches_edges_persist_and_count(tmp_path):
+    boundary = commit("b" * 40, committed_at=T0)
+    tip = commit("c" * 40, parents=(boundary.sha,), committed_at=DAY_ONE)
+    mapped = map_git_index(git_index(selection((tip,), (boundary,))), ids(), run_id=RUN_ID)
+    registry = seed_registry(at=NOW)
+    registry, topic = registry.register(
+        "sparse-training", at=NOW, created_by="test", ids=ids()
+    )
+    topics = map_registry(registry, ids(), run_id=RUN_ID)
+    about = map_topic_assignments(
+        [topic_assignment("snap:guide", topic.topic_id, "sparse-training")],
+        ids(), run_id=RUN_ID,
+    )
+
+    sink = sink_at(tmp_path)
+    sink.write_entities([*mapped.entities, *topics.entities], analysis_run_id=RUN_ID)
+    sink.write_relationships(
+        [*mapped.relationships, *about.relationships], analysis_run_id=RUN_ID
+    )
+
+    assert sink.label_counts()["Topic"] == 1
+    assert sink.edge_counts()["TOUCHES"] == 2
+    assert sink.edge_counts()["ABOUT"] == 1
+    found = sink.find_nodes("Topic", "name", "sparse-training")
+    assert len(found) == 1
+    assert found[0]["prov_run_id"] == RUN_ID
+    sink.close()
 
 
 # ---------------------------------------------------------------------------

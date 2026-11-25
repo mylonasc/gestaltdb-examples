@@ -266,6 +266,70 @@ def test_unobserved_branches_become_placeholders():
     assert all(edge["target"] != missing for edge in dropped["edges"])
 
 
+def writes_edge(
+    source: str, target: str, edge_type: str, origin: str = "git",
+) -> RelationshipWrite:
+    from repo_history.graph import RelationshipWrite
+
+    return RelationshipWrite(
+        edge_id=f"write:{source}:{edge_type}:{target}",
+        edge_type=edge_type,
+        source=source,
+        target=target,
+        properties={"rationale": f"{edge_type} edge"},
+        valid_from=DAY_ONE,
+        origin=origin,
+        origin_id=f"{source}:{target}",
+        event_id=f"event:{source}:{target}",
+        run_id=RUN_ID,
+        info_horizon=NOW,
+        evidence_ids=(),
+    )
+
+
+def test_extra_edges_join_kept_nodes_with_factual_default():
+    arguments = fixture_inputs()
+    arguments["extra_edges"] = [
+        writes_edge(ids().commit(MID), ids().commit(ROOT), "PARENT_COMMIT"),
+        writes_edge(ids().commit(TIP), ids().file("docs/guide.md"), "TOUCHES"),
+        writes_edge(
+            ids().work_item("github", 10), ids().topic("sparse"), "ABOUT",
+            origin="labeling",
+        ),
+        writes_edge("snap:guide", ids().topic("sparse"), "ABOUT", origin="labeling"),
+    ]
+    data = build_viewer_data(**arguments)
+
+    by_pair = {(edge["source"], edge["target"]): edge for edge in data["edges"]}
+    assert by_pair[(ids().commit(MID), ids().commit(ROOT))]["relation"] == "PARENT_COMMIT"
+    assert by_pair[(ids().commit(TIP), ids().file("docs/guide.md"))]["relation"] == "TOUCHES"
+    assert by_pair[(ids().work_item("github", 10), ids().topic("sparse"))]["relation"] == "ABOUT"
+    # The snapshot-subject ABOUT aggregates to the same file edge.
+    assert ("snap:guide", ids().topic("sparse")) not in by_pair
+    assert by_pair[(ids().commit(MID), ids().commit(ROOT))]["inferred"] is False
+    assert by_pair[(ids().commit(TIP), ids().file("docs/guide.md"))]["inferred"] is False
+    assert by_pair[(ids().work_item("github", 10), ids().topic("sparse"))]["inferred"] is False
+
+
+def test_extra_linking_related_to_edges_are_flagged_inferred():
+    arguments = fixture_inputs(links=[])
+    arguments["extra_edges"] = [
+        writes_edge(
+            ids().work_item("github", 10), ids().topic("sparse"),
+            "RELATED_TO", origin="linking",
+        ),
+        writes_edge(
+            ids().work_item("github", 10), ids().file("docs/guide.md"),
+            "RELATED_TO", origin="github",
+        ),
+    ]
+    data = build_viewer_data(**arguments)
+
+    by_target = {edge["target"]: edge for edge in data["edges"]}
+    assert by_target[ids().topic("sparse")]["inferred"] is True
+    assert by_target[ids().file("docs/guide.md")]["inferred"] is False
+
+
 def test_export_is_deterministic():
     assert build_viewer_data(**fixture_inputs()) == build_viewer_data(**fixture_inputs())
 

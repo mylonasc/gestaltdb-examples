@@ -174,6 +174,12 @@ class LabelingSettings(FrozenModel):
         return self
 
 
+class LinkingSettings(FrozenModel):
+    """Score floor for inferred cross-entity links."""
+
+    min_inference_score: float = Field(default=0.3, ge=0.0, le=1.0)
+
+
 class GitHubSettings(FrozenModel):
     """Bounded GitHub REST discovery and evidence-cache limits."""
 
@@ -231,6 +237,7 @@ class RuntimeConfig(FrozenModel):
     orchestration: OrchestrationSettings = Field(default_factory=OrchestrationSettings)
     graph: GraphSettings = Field(default_factory=GraphSettings)
     labeling: LabelingSettings = Field(default_factory=LabelingSettings)
+    linking: LinkingSettings = Field(default_factory=LinkingSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     data_root: str = "data"
     cache_dir: str = "data/cache"

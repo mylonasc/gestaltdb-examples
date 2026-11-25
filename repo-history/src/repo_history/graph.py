@@ -903,19 +903,22 @@ class GraphSink(GraphSinkProtocol):
 
     def label_counts(self) -> dict[str, int]:
         self._ensure_open("count entities")
+        self._ensure_ready()
         return {
             label: self._db.count_nodes_by_label(label)
             for label in ("Commit", "File", "Snapshot", "WorkItem", "ProviderLabel", "Branch")
         }
 
-    def edge_counts(self) -> dict[str, int]:
+    def edge_counts(
+        self, edge_types: Sequence[str] | None = None
+    ) -> dict[str, int]:
         self._ensure_open("count relationships")
-        return {
-            edge_type: self._db.count_edges_by_type(edge_type)
-            for edge_type in (
+        self._ensure_ready()
+        if edge_types is None:
+            edge_types = (
                 PARENT_COMMIT, MEMBER_OF, OF_FILE, HAS_LABEL, CHILD_OF, TIP_OF, MERGED_AS,
             )
-        }
+        return {edge_type: self._db.count_edges_by_type(edge_type) for edge_type in edge_types}
 
     def close(self) -> None:
         if self._closed:

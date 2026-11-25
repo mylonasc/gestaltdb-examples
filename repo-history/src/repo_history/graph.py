@@ -18,8 +18,9 @@ versions that supersede earlier ones; old evidence is never rewritten.
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -31,43 +32,83 @@ from gestaltdb.graphdb import (
     TemporalVersionError,
 )
 
+from .content import ContentIndex, detect_language, media_type_for
 from .git import GitIndex
 from .github import GitHubDiscovery
 from .ids import IdFactory, stable_id
+from .labeling import TopicAssignment, TopicRegistry
 from .models import CoverageGap, CoverageStatus, FrozenModel, GraphSettings, ensure_utc
 from .protocols import GraphSink as GraphSinkProtocol
 
 __all__ = [
+    "ABOUT",
+    "AFFECTS",
+    "BELONGS_TO",
+    "CHANGES",
     "CHILD_OF",
+    "DEFINED_AT",
+    "DEPENDS_ON",
+    "HAS_BRANCH",
+    "HAS_FOLDER",
     "HAS_LABEL",
+    "IMPORTS",
     "MEMBER_OF",
     "MERGED_AS",
     "OF_FILE",
     "PARENT_COMMIT",
+    "PROVIDED_BY",
     "TIP_OF",
+    "TOUCHES",
     "EntityWrite",
     "GraphClosedError",
     "GraphError",
     "GraphSink",
+    "HIERARCHICAL_EDGE_TYPES",
     "MappedGraph",
     "NODE_INDEXES",
     "EDGE_INDEXES",
     "RelationshipWrite",
     "VersionRecord",
     "WriteReport",
+    "map_classes",
+    "map_code_components",
+    "map_diffs",
     "map_discovery",
+    "map_folders",
     "map_git_index",
+    "map_imports",
+    "map_registry",
+    "map_repository_branches",
+    "map_topic_assignments",
 ]
 
 # Edge types used by typed traversal.  The driver reads the edge type from
 # the ``type`` property, so the sink always sets it.
+ABOUT = "ABOUT"
+AFFECTS = "AFFECTS"
+BELONGS_TO = "BELONGS_TO"
+DEFINED_AT = "DEFINED_AT"
+DEPENDS_ON = "DEPENDS_ON"
+PROVIDED_BY = "PROVIDED_BY"
 PARENT_COMMIT = "PARENT_COMMIT"
 MEMBER_OF = "MEMBER_OF"
 OF_FILE = "OF_FILE"
+TOUCHES = "TOUCHES"
+CHANGES = "CHANGES"
+IMPORTS = "IMPORTS"
+HAS_BRANCH = "HAS_BRANCH"
+HAS_FOLDER = "HAS_FOLDER"
 HAS_LABEL = "HAS_LABEL"
 CHILD_OF = "CHILD_OF"
 TIP_OF = "TIP_OF"
 MERGED_AS = "MERGED_AS"
+
+#: Edge types that express containment or ancestry.  The sink stamps these
+#: writes with ``properties["hierarchical"] = True``; the visualizer pulls
+#: them harder than associative edges (configurably).
+HIERARCHICAL_EDGE_TYPES = frozenset(
+    {PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, CHANGES, TIP_OF, CHILD_OF, BELONGS_TO, HAS_BRANCH, HAS_FOLDER, DEFINED_AT}
+)
 
 NODE_INDEXES = ("sha", "path", "number", "name", "prov_run_id")
 EDGE_INDEXES = ("run_id",)
@@ -204,7 +245,7 @@ def map_git_index(
                     edge_type=PARENT_COMMIT,
                     source=logical_id,
                     target=ids.commit(parent),
-                    properties={},
+                    properties={"hierarchical": True},
                     valid_from=record.committed_at,
                     origin="git",
                     origin_id=f"{record.sha}:{parent}",
@@ -250,7 +291,7 @@ def map_git_index(
                 edge_type=MEMBER_OF,
                 source=snapshot_id,
                 target=ids.commit(entry.commit_sha),
-                properties={},
+                properties={"hierarchical": True},
                 valid_from=committed_at,
                 origin="git",
                 origin_id=f"{entry.commit_sha}:{entry.path}:member",
@@ -268,7 +309,7 @@ def map_git_index(
                 edge_type=OF_FILE,
                 source=snapshot_id,
                 target=ids.file(entry.path),
-                properties={},
+                properties={"hierarchical": True},
                 valid_from=committed_at,
                 origin="git",
                 origin_id=f"{entry.commit_sha}:{entry.path}:file",
@@ -288,13 +329,21 @@ def map_git_index(
         previous = first_seen.get(entry.path)
         if previous is None or committed_at < previous:
             first_seen[entry.path] = committed_at
+    for change in index.changes:
+        committed_at = commit_times.get(change.commit_sha)
+        if committed_at is not None:
+            first_seen[change.path] = min(first_seen.get(change.path, committed_at), committed_at)
     for path, valid_from in sorted(first_seen.items()):
         file_id = ids.file(path)
         entities.append(
             EntityWrite(
                 logical_id=file_id,
                 labels=("File",),
-                properties={"path": path},
+                properties={
+                    "path": path,
+                    "language": detect_language(path),
+                    "media_type": media_type_for(path),
+                },
                 valid_from=valid_from,
                 origin="git",
                 origin_id=path,
@@ -333,7 +382,7 @@ def map_git_index(
                 edge_type=TIP_OF,
                 source=branch_id,
                 target=ids.commit(branch.tip_sha),
-                properties={"contains_anchor": branch.contains_anchor},
+                properties={"contains_anchor": branch.contains_anchor, "hierarchical": True},
                 valid_from=index.selection.window.start,
                 origin="git",
                 origin_id=f"{branch.name}:{branch.tip_sha}",
@@ -466,7 +515,7 @@ def map_discovery(
                 edge_type=CHILD_OF,
                 source=ids.work_item("github", edge.child_number),
                 target=ids.work_item("github", edge.parent_number),
-                properties={"relation": edge.relation},
+                properties={"relation": edge.relation, "hierarchical": True},
                 valid_from=discovery.observed_at,
                 origin="github",
                 origin_id=f"{edge.parent_number}:{edge.child_number}",
@@ -515,6 +564,408 @@ def map_discovery(
     return MappedGraph(
         entities=tuple(entities), relationships=tuple(relationships), skipped=tuple(skipped)
     )
+
+
+def map_registry(
+    registry: TopicRegistry, ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Map derived topics to ``Topic`` entities with lifecycle provenance."""
+
+    entities: list[EntityWrite] = []
+    for topic in registry.topics:
+        entities.append(
+            EntityWrite(
+                logical_id=topic.topic_id,
+                labels=("Topic",),
+                properties={
+                    "name": topic.name,
+                    "aliases": list(topic.aliases),
+                    "description": topic.description,
+                    "created_by": topic.created_by,
+                    "merged_into": topic.merged_into,
+                    "supersedes": list(topic.supersedes),
+                },
+                valid_from=topic.created_at,
+                origin="labeling",
+                origin_id=topic.topic_id,
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "topic", topic.topic_id
+                ),
+                run_id=run_id,
+                info_horizon=topic.created_at,
+                evidence_ids=(),
+            )
+        )
+    return MappedGraph(entities=tuple(entities))
+
+
+def map_topic_assignments(
+    assignments: Sequence[TopicAssignment], ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Map derived topic assignments to ``ABOUT`` entity-topic edges.
+
+    Subject IDs follow the layers that produced them: snapshot occurrences
+    stay snapshot IDs (the graph holds ``Snapshot`` nodes under those IDs),
+    bare commit SHAs resolve to ``Commit`` nodes, and ``workitem:github:N``
+    subjects resolve to ``WorkItem`` nodes.  Provider-label preservation
+    assignments carry no topic and are skipped.
+    """
+
+    relationships: list[RelationshipWrite] = []
+    skipped: list[str] = []
+    for assignment in assignments:
+        if assignment.kind != "derived" or assignment.topic_id is None:
+            skipped.append(f"assignment:{assignment.subject_id} has no derived topic")
+            continue
+        workitem = re.fullmatch(r"workitem:github:(\d+)", assignment.subject_id)
+        commit_sha = re.fullmatch(r"[0-9a-fA-F]{40}", assignment.subject_id)
+        source = (
+            ids.work_item("github", int(workitem.group(1)))
+            if workitem is not None
+            else ids.commit(commit_sha.group(0).lower())
+            if commit_sha is not None
+            else assignment.subject_id
+        )
+        horizon = assignment.result.provenance.info_horizon
+        relationships.append(
+            RelationshipWrite(
+                edge_id=stable_id(
+                    "edge", ids.repository_id, ABOUT,
+                    assignment.subject_id, assignment.topic_id,
+                ),
+                edge_type=ABOUT,
+                source=source,
+                target=assignment.topic_id,
+                properties={
+                    "action": assignment.action,
+                    "confidence": assignment.confidence,
+                    "rationale": assignment.rationale,
+                },
+                valid_from=horizon,
+                origin="labeling",
+                origin_id=f"{assignment.subject_id}:{assignment.topic_id}",
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "topic-about",
+                    assignment.subject_id, assignment.topic_id,
+                ),
+                run_id=run_id,
+                info_horizon=horizon,
+                evidence_ids=tuple(
+                    ref.evidence_id for ref in assignment.result.evidence
+                ),
+            )
+        )
+    return MappedGraph(
+        relationships=tuple(relationships), skipped=tuple(skipped)
+    )
+
+
+def map_imports(
+    content: ContentIndex, index: GitIndex, ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Compatibility shim for the dependency projection; see code_graph."""
+    from .code_graph import map_imports as project_imports
+
+    return project_imports(content, index, ids, run_id=run_id)
+
+
+def map_classes(
+    content: ContentIndex, index: GitIndex, ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Legacy class-only projection; new callers should use map_code_components."""
+    mapped = map_code_components(content, index, ids, run_id=run_id)
+    classes = tuple(entity for entity in mapped.entities if entity.labels == ("Class",))
+    class_ids = {entity.logical_id for entity in classes}
+    return MappedGraph(
+        entities=classes,
+        relationships=tuple(
+            edge for edge in mapped.relationships
+            if edge.source in class_ids and edge.edge_type == DEFINED_AT
+        ),
+    )
+
+
+def map_code_components(
+    content: ContentIndex, index: GitIndex, ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Project the common source IR without coupling parsers to the sink."""
+    from .code_graph import map_code_components as project_components
+
+    return project_components(content, index, ids, run_id=run_id)
+
+
+def map_folders(
+    paths: Sequence[str], ids: IdFactory, *, run_id: str, window_start: datetime
+) -> MappedGraph:
+    """Map directory structure to ``Folder`` entities and a ``Repository`` root.
+
+    Every distinct parent directory becomes a Folder; each file links only to
+    its immediate parent, each nested folder links to its own parent, and
+    top-level folders link to the repository root (``HAS_FOLDER``).  All
+    three edge types are hierarchical.
+    """
+
+    entities: list[EntityWrite] = []
+    relationships: list[RelationshipWrite] = []
+
+    def belongs_to(source: str, target: str, origin_id: str) -> None:
+        relationships.append(
+            RelationshipWrite(
+                edge_id=stable_id("edge", ids.repository_id, BELONGS_TO, source, target),
+                edge_type=BELONGS_TO,
+                source=source,
+                target=target,
+                properties={"hierarchical": True},
+                valid_from=window_start,
+                origin="git",
+                origin_id=origin_id,
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "git-belongs-to", source, target
+                ),
+                run_id=run_id,
+                info_horizon=window_start,
+                evidence_ids=(),
+            )
+        )
+
+    def has_folder(folder_id: str, folder: str) -> None:
+        relationships.append(
+            RelationshipWrite(
+                edge_id=stable_id("edge", ids.repository_id, HAS_FOLDER, folder),
+                edge_type=HAS_FOLDER,
+                source=ids.repository_id,
+                target=folder_id,
+                properties={"hierarchical": True},
+                valid_from=window_start,
+                origin="git",
+                origin_id=f"repository:{folder}",
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "git-has-folder", folder
+                ),
+                run_id=run_id,
+                info_horizon=window_start,
+                evidence_ids=(),
+            )
+        )
+
+    repository_id = ids.repository_id
+    entities.append(
+        EntityWrite(
+            logical_id=repository_id,
+            labels=("Repository",),
+            properties={"url": ids.repository_url},
+            valid_from=window_start,
+            origin="git",
+            origin_id="repository",
+            event_id=stable_id("graph-write", ids.repository_id, "repository"),
+            run_id=run_id,
+            info_horizon=window_start,
+            evidence_ids=(),
+        )
+    )
+    for path in sorted(set(paths)):
+        if "/" not in path:
+            belongs_to(ids.file(path), repository_id, path)
+    folders: dict[str, set[str]] = {}
+    for path in sorted(set(paths)):
+        parts = path.split("/")[:-1]
+        for depth in range(1, len(parts) + 1):
+            folders.setdefault("/".join(parts[:depth]), set()).add(path)
+    for folder in sorted(folders):
+        folder_id = stable_id("folder", ids.repository_id, folder)
+        members = sorted(folders[folder])
+        entities.append(
+            EntityWrite(
+                logical_id=folder_id,
+                labels=("Folder",),
+                properties={
+                    "path": folder,
+                    "depth": folder.count("/") + 1,
+                    "file_count": len(members),
+                },
+                valid_from=window_start,
+                origin="git",
+                origin_id=f"folder:{folder}",
+                event_id=stable_id("graph-write", ids.repository_id, "folder", folder),
+                run_id=run_id,
+                info_horizon=window_start,
+                evidence_ids=(),
+            )
+        )
+        for member in members:
+            head, _, _ = member.rpartition("/")
+            if head == folder:
+                belongs_to(ids.file(member), folder_id, member)
+        parent, _, _ = folder.rpartition("/")
+        if parent:
+            belongs_to(folder_id, stable_id("folder", ids.repository_id, parent), folder)
+        else:
+            has_folder(folder_id, folder)
+    return MappedGraph(entities=tuple(entities), relationships=tuple(relationships))
+
+
+def _preview_text(text: str | None, *, max_chars: int = 2000, max_lines: int = 40) -> str:
+    """Bounded excerpt shown in the UI; full text stays in parsed content."""
+
+    if not text:
+        return ""
+    lines = text.splitlines()[:max_lines]
+    excerpt = "\n".join(lines)
+    return excerpt[:max_chars]
+
+
+def map_diffs(
+    content: ContentIndex, index: GitIndex, ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Index file changes as ``Diff`` entities between commits and files.
+
+    Only actual ``index.changes`` records become Diffs — one per
+    ``(commit, path)`` change, including deletions that have no snapshot in
+    the changing commit.  Unchanged snapshot entries never produce Diffs.
+    Commits reach files only through diffs: ``TOUCHES`` edges run commit to
+    diff, and ``CHANGES`` edges run diff to file.  Both are hierarchical;
+    nothing here is invented. ``AFFECTS`` also reaches the observed local
+    modules backed by changed Python files, independently of symbol edits.
+    """
+
+    from .code_graph import change_details, module_change_targets
+
+    entities: list[EntityWrite] = []
+    relationships: list[RelationshipWrite] = []
+    skipped: list[str] = []
+    commit_times = {
+        record.sha: record.committed_at
+        for record in (*index.selection.selected_commits, *index.selection.boundary_commits)
+    }
+    seen: set[str] = set()
+    snapshot_ids_by_key = {
+        (snap.commit_sha, snap.path): snap.snapshot_id for snap in content.snapshots
+    }
+
+    for change in sorted(index.changes, key=lambda item: (item.commit_sha, item.path)):
+        committed_at = commit_times.get(change.commit_sha)
+        if committed_at is None:
+            skipped.append(f"change:{change.change_id} without commit time")
+            continue
+        diff_id = stable_id("diff", ids.repository_id, change.commit_sha, change.path)
+        if diff_id in seen:
+            continue
+        seen.add(diff_id)
+        snapshot_id = snapshot_ids_by_key.get((change.commit_sha, change.path))
+        parsed = content.content_for(snapshot_id) if snapshot_id else None
+        preview = _preview_text(parsed.text if parsed is not None else None)
+        details, affected = change_details(change, content)
+        entities.append(
+            EntityWrite(
+                logical_id=diff_id,
+                labels=("Diff",),
+                properties={
+                    "commit_sha": change.commit_sha,
+                    "path": change.path,
+                    "old_path": change.old_path,
+                    "status": change.status,
+                    "old_oid": change.old_oid,
+                    "new_oid": change.new_oid,
+                    "is_binary": change.is_binary,
+                    "preview": preview,
+                    "source_url": change.source_url,
+                    **details,
+                },
+                valid_from=committed_at,
+                origin="git",
+                origin_id=f"{change.commit_sha}:{change.path}",
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "git-diff",
+                    change.commit_sha, change.path,
+                ),
+                run_id=run_id,
+                info_horizon=committed_at,
+                evidence_ids=(ids.evidence("git", change.commit_sha, change.source_url),),
+            )
+        )
+        for (kind, qualname), status in affected:
+            path = (change.old_path or change.path) if status == "deleted" else change.path
+            target = ids.symbol(path, kind, qualname)
+            relationships.append(RelationshipWrite(
+                edge_id=stable_id("edge", ids.repository_id, AFFECTS, diff_id, target),
+                edge_type=AFFECTS, source=diff_id, target=target,
+                properties={"status": status, "basis": "before-after-source-comparison"},
+                valid_from=committed_at, origin="git",
+                origin_id=f"{change.commit_sha}:{change.path}:{qualname}:affects",
+                event_id=stable_id("graph-write", ids.repository_id, diff_id, target),
+                run_id=run_id, info_horizon=committed_at,
+                evidence_ids=(ids.evidence("git", change.commit_sha, change.source_url),),
+            ))
+        for path, sides in module_change_targets(change, content).items():
+            target = ids.module(path)
+            relationships.append(RelationshipWrite(
+                edge_id=stable_id("edge", ids.repository_id, AFFECTS, diff_id, target),
+                edge_type=AFFECTS, source=diff_id, target=target,
+                properties={
+                    "status": change.status, "basis": "file-change",
+                    "path": path, "change_sides": sides,
+                },
+                valid_from=committed_at, origin="git",
+                origin_id=f"{change.commit_sha}:{path}:module-affects",
+                event_id=stable_id("graph-write", ids.repository_id, diff_id, target),
+                run_id=run_id, info_horizon=committed_at,
+                evidence_ids=(ids.evidence("git", change.commit_sha, change.source_url),),
+            ))
+        for edge_type, source, target, kind in (
+            (TOUCHES, ids.commit(change.commit_sha), diff_id, "touches"),
+            (CHANGES, diff_id, ids.file(change.path), "changes"),
+        ):
+            relationships.append(
+                RelationshipWrite(
+                    edge_id=stable_id(
+                        "edge", ids.repository_id, edge_type,
+                        change.commit_sha, change.path,
+                    ),
+                    edge_type=edge_type,
+                    source=source,
+                    target=target,
+                    properties={"hierarchical": True, "status": change.status},
+                    valid_from=committed_at,
+                    origin="git",
+                    origin_id=f"{change.commit_sha}:{change.path}:{kind}",
+                    event_id=stable_id(
+                        "graph-write", ids.repository_id, f"git-{kind}",
+                        change.commit_sha, change.path,
+                    ),
+                    run_id=run_id,
+                    info_horizon=committed_at,
+                    evidence_ids=(ids.evidence("git", change.commit_sha, change.source_url),),
+                )
+            )
+    return MappedGraph(entities=tuple(entities), relationships=tuple(relationships), skipped=tuple(skipped))
+
+
+def map_repository_branches(
+    branch_names: Sequence[str], ids: IdFactory, *, run_id: str, window_start: datetime
+) -> MappedGraph:
+    """Link observed branches to the repository root with ``HAS_BRANCH`` edges."""
+
+    relationships: list[RelationshipWrite] = []
+    for name in sorted(set(branch_names)):
+        relationships.append(
+            RelationshipWrite(
+                edge_id=stable_id("edge", ids.repository_id, HAS_BRANCH, name),
+                edge_type=HAS_BRANCH,
+                source=ids.repository_id,
+                target=ids.branch(name),
+                properties={"hierarchical": True},
+                valid_from=window_start,
+                origin="git",
+                origin_id=f"repository:{name}",
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "git-has-branch", name
+                ),
+                run_id=run_id,
+                info_horizon=window_start,
+                evidence_ids=(),
+            )
+        )
+    return MappedGraph(relationships=tuple(relationships))
 
 
 # ---------------------------------------------------------------------------
@@ -702,6 +1153,7 @@ class GraphSink(GraphSinkProtocol):
         except TemporalVersionError as exc:
             if "already exists" not in str(exc):
                 raise
+            self._ensure_ready()
             existing = self._db.get_node_version(version_id)
             if existing is None or dict(existing.node.properties) != properties:
                 raise GraphError(
@@ -735,6 +1187,7 @@ class GraphSink(GraphSinkProtocol):
         except TemporalVersionError as exc:
             if "already exists" not in str(exc):
                 raise
+            self._ensure_ready()
             existing = self._db.get_edge_version(version_id)
             if existing is None or dict(existing.edge.properties) != properties:
                 raise GraphError(
@@ -901,13 +1354,16 @@ class GraphSink(GraphSinkProtocol):
             for node in self._db.neighbors_by_edge_type(logical_id, edge_type, direction)
         ]
 
-    def label_counts(self) -> dict[str, int]:
+    def label_counts(self, labels: Sequence[str] | None = None) -> dict[str, int]:
         self._ensure_open("count entities")
         self._ensure_ready()
-        return {
-            label: self._db.count_nodes_by_label(label)
-            for label in ("Commit", "File", "Snapshot", "WorkItem", "ProviderLabel", "Branch")
-        }
+        if labels is None:
+            labels = (
+                "Commit", "File", "Snapshot", "WorkItem", "ProviderLabel", "Branch",
+                "Topic", "Folder", "Class", "Repository", "Diff", "Module",
+                "Function", "Method", "Field", "ExternalLibrary",
+            )
+        return {label: self._db.count_nodes_by_label(label) for label in labels}
 
     def edge_counts(
         self, edge_types: Sequence[str] | None = None
@@ -916,7 +1372,10 @@ class GraphSink(GraphSinkProtocol):
         self._ensure_ready()
         if edge_types is None:
             edge_types = (
-                PARENT_COMMIT, MEMBER_OF, OF_FILE, HAS_LABEL, CHILD_OF, TIP_OF, MERGED_AS,
+                ABOUT, DEFINED_AT, PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, IMPORTS,
+                BELONGS_TO, HAS_BRANCH, HAS_FOLDER, HAS_LABEL, CHILD_OF, TIP_OF, MERGED_AS, CHANGES,
+                "MENTIONS", "INTENDS_TO_RESOLVE", "CLOSED_BY", "RELATED_TO",
+                AFFECTS, DEPENDS_ON, PROVIDED_BY,
             )
         return {edge_type: self._db.count_edges_by_type(edge_type) for edge_type in edge_types}
 

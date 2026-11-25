@@ -10,9 +10,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from repo_history.content import ContentIndex, SnapshotContent
 from repo_history.git import (
     BranchObservation,
     CommitRecord,
+    FileChangeRecord,
     GitIndex,
     GitSelection,
     TreeEntryRecord,
@@ -27,21 +29,35 @@ from repo_history.github import (
     RevisionAvailability,
 )
 from repo_history.graph import (
+    ABOUT,
+    BELONGS_TO,
+    CHANGES,
     CHILD_OF,
+    HAS_BRANCH,
+    HAS_FOLDER,
     HAS_LABEL,
+    IMPORTS,
     MEMBER_OF,
     MERGED_AS,
     OF_FILE,
     PARENT_COMMIT,
     TIP_OF,
+    TOUCHES,
     EntityWrite,
     GraphClosedError,
     GraphError,
     GraphSink,
+    map_diffs,
     map_discovery,
+    map_folders,
     map_git_index,
+    map_imports,
+    map_registry,
+    map_repository_branches,
+    map_topic_assignments,
 )
 from repo_history.ids import IdFactory
+from repo_history.labeling import TopicAssignment, seed_registry
 from repo_history.models import GraphSettings, TimeWindow
 from repo_history.protocols import GraphSink as GraphSinkProtocol
 
@@ -173,6 +189,44 @@ def sink_at(tmp_path, run_id: str = RUN_ID) -> GraphSink:
     )
 
 
+def topic_assignment(
+    subject_id: str,
+    topic_id: str,
+    topic_name: str,
+    *,
+    kind: str = "derived",
+    action: str = "reuse",
+    horizon: datetime = NOW,
+) -> TopicAssignment:
+    from repo_history.analysis import AnalysisResult, DecisionStatus, Provenance
+
+    derived = kind == "derived"
+    return TopicAssignment(
+        subject_id=subject_id,
+        kind=kind,  # type: ignore[arg-type]
+        action=action,  # type: ignore[arg-type]
+        topic_id=topic_id if derived else None,
+        topic_name=topic_name if derived else None,
+        provider_label=None if derived else topic_name,
+        confidence=0.9,
+        rationale="fixture",
+        registry_version=3,
+        result=AnalysisResult.create(
+            subject_id=subject_id,
+            kind="topic",
+            status=DecisionStatus.ACCEPTED,
+            value={"action": action, "topic_id": topic_id},
+            provenance=Provenance(
+                method="deterministic-tfidf-labeler",
+                method_version="1",
+                run_id=RUN_ID,
+                info_horizon=horizon,
+            ),
+            evidence=(),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Mapping
 # ---------------------------------------------------------------------------
@@ -299,9 +353,488 @@ def test_map_discovery_covers_items_labels_hierarchy_and_merges():
     assert "out of scope" in mapped.skipped[0]
 
 
+def test_map_git_index_has_no_direct_commit_file_edges():
+    # Commits reach files only through diffs (see map_diffs); the Git
+    # selection maps ancestry, snapshots, files, and branches.
+    boundary = commit("b" * 40, committed_at=T0)
+    tip = commit("c" * 40, parents=(boundary.sha,), committed_at=DAY_ONE)
+    mapped = map_git_index(git_index(selection((tip,), (boundary,))), ids(), run_id=RUN_ID)
+
+    kinds = {edge.edge_type for edge in mapped.relationships}
+    assert "TOUCHES" not in kinds and "CHANGES" not in kinds
+    assert {"PARENT_COMMIT", "MEMBER_OF", "OF_FILE", "TIP_OF"} <= kinds
+
+
+def test_map_diffs_links_commits_to_files_through_diff_nodes():
+    from repo_history.content import CodeDocument, ImportRecord, ParsedContent
+    from repo_history.git import TreeEntryRecord
+
+    tip, base = "c" * 40, "b" * 40
+    content = ContentIndex(
+        contents=(
+            ParsedContent(
+                content_id="c:x", blob_id="b:x", oid="o" * 40, media_type="text",
+                status="parsed", text="hello\n",
+            ),
+        ),
+        snapshots=(
+            SnapshotContent(
+                snapshot_id="snap:tip", commit_sha=tip, path="x.py",
+                oid="o" * 40, content_id="c:x", status="parsed",
+                media_type="text", language="text", module=None,
+                is_baseline=False, source_url="u",
+            ),
+        ),
+    )
+    index = GitIndex(
+        selection=selection(
+            (commit(tip, parents=(base,), committed_at=DAY_ONE),),
+            (commit(base, committed_at=T0),),
+        ),
+        snapshots=(
+            TreeEntryRecord(
+                snapshot_id="snap:tip", commit_sha=tip, path="x.py",
+                object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+                is_binary=False, is_lfs_pointer=False, content_status="inspected",
+                source_url="u",
+            ),
+        ),
+        changes=(
+            FileChangeRecord(
+                change_id="change:1", commit_sha=tip, parent_sha=base,
+                comparison="first-parent", path="x.py", status="added",
+                source_url="u",
+            ),
+        ),
+    )
+    mapped = map_diffs(content, index, ids(), run_id=RUN_ID)
+
+    assert len(mapped.entities) == 1
+    (entity,) = [e for e in mapped.entities if e.valid_from == DAY_ONE]
+    assert entity.labels == ("Diff",)
+    assert entity.properties["status"] == "added"
+    assert entity.properties["preview"] == "hello"
+    assert entity.valid_from == DAY_ONE
+
+    touches = [edge for edge in mapped.relationships if edge.edge_type == TOUCHES]
+    changes = [edge for edge in mapped.relationships if edge.edge_type == CHANGES]
+    assert len(touches) == 1 and len(changes) == 1
+    assert (touches[0].source, touches[0].target) == (
+        ids().commit(tip), entity.logical_id,
+    )
+    assert (changes[0].source, changes[0].target) == (
+        entity.logical_id, ids().file("x.py"),
+    )
+    assert all(edge.properties.get("hierarchical") is True for edge in mapped.relationships)
+
+
+def test_map_diffs_ignores_unchanged_snapshots_and_covers_deletions():
+    from repo_history.content import ParsedContent
+    from repo_history.git import TreeEntryRecord
+
+    tip, base = "c" * 40, "b" * 40
+    content = ContentIndex(
+        contents=(
+            ParsedContent(
+                content_id="c:x", blob_id="b:x", oid="o" * 40, media_type="text",
+                status="parsed", text="hello\n",
+            ),
+        ),
+        snapshots=(
+            SnapshotContent(
+                snapshot_id="snap:tip", commit_sha=tip, path="x.py",
+                oid="o" * 40, content_id="c:x", status="parsed",
+                media_type="text", language="text", module=None,
+                is_baseline=False, source_url="u",
+            ),
+            SnapshotContent(
+                snapshot_id="snap:base", commit_sha=base, path="x.py",
+                oid="o" * 40, content_id="c:x", status="parsed",
+                media_type="text", language="text", module=None,
+                is_baseline=True, source_url="u",
+            ),
+        ),
+    )
+    # Unchanged carry-forward: snapshots exist in both commits but no change.
+    index = GitIndex(
+        selection=selection(
+            (commit(tip, parents=(base,), committed_at=DAY_ONE),),
+            (commit(base, committed_at=T0),),
+        ),
+        snapshots=(
+            TreeEntryRecord(
+                snapshot_id="snap:tip", commit_sha=tip, path="x.py",
+                object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+                is_binary=False, is_lfs_pointer=False, content_status="inspected",
+                source_url="u",
+            ),
+            TreeEntryRecord(
+                snapshot_id="snap:base", commit_sha=base, path="x.py",
+                object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+                is_binary=False, is_lfs_pointer=False, content_status="inspected",
+                is_baseline=True, source_url="u",
+            ),
+        ),
+        changes=(),
+    )
+    assert map_diffs(content, index, ids(), run_id=RUN_ID).entities == ()
+
+    # Deletion-only change: no snapshot for the path in the changing commit,
+    # but the diff and both edges still exist.
+    deleted = index.model_copy(update={"changes": (
+        FileChangeRecord(
+            change_id="change:del", commit_sha=tip, parent_sha=base,
+            comparison="first-parent", path="old.py", status="deleted",
+            old_oid="d" * 40, source_url="u",
+        ),
+    )})
+    mapped = map_diffs(content, deleted, ids(), run_id=RUN_ID)
+    assert len(mapped.entities) == 1
+    assert mapped.entities[0].properties["status"] == "deleted"
+    assert mapped.entities[0].properties["preview"] == ""
+    kinds = sorted(edge.edge_type for edge in mapped.relationships)
+    assert kinds == [CHANGES, TOUCHES]
+
+
+def test_map_imports_resolves_absolute_relative_and_package_imports():
+    from repo_history.content import CodeDocument, ImportRecord, ParsedContent
+    from repo_history.git import TreeEntryRecord
+    from repo_history.graph import IMPORTS, map_imports
+
+    def parsed(content_id, *records):
+        return ParsedContent(
+            content_id=content_id, blob_id=f"blob:{content_id}", oid="o" * 40,
+            media_type="python", status="parsed", language="python",
+            code=CodeDocument(language="python", imports=tuple(records)),
+        )
+
+    def tree(path):
+        return TreeEntryRecord(
+            snapshot_id=f"snap:{path}", commit_sha="c" * 40, path=path,
+            object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+            is_binary=False, is_lfs_pointer=False, content_status="inspected",
+            source_url=f"{REPOSITORY_URL}/blob/{'c' * 40}/{path}",
+        )
+
+    paths = [
+        "models/gcn.py", "tests/t.py", "models/__init__.py",
+        "models/graphnet.py", "tf_gnns/models/gcn.py", "tf_gnns/__init__.py",
+    ]
+    content_ids = {
+        "models/gcn.py": "c:gcn", "tests/t.py": "c:t", "models/__init__.py": "c:init",
+    }
+    content = ContentIndex(
+        contents=(
+            parsed(
+                "c:gcn",
+                ImportRecord(kind="import", module=None, names=("torch",), line=1),
+                ImportRecord(kind="from", module="models", names=("graphnet",), line=2),
+                ImportRecord(kind="import", module=None, names=("os",), line=3),
+            ),
+            parsed(
+                "c:t",
+                ImportRecord(kind="from", module="tf_gnns.models", names=("gcn",), line=1),
+                ImportRecord(kind="from", module="tf_gnns", names=(), line=2),
+                ImportRecord(kind="import", module=None, names=("sys",), line=3),
+            ),
+            parsed(
+                "c:init",
+                ImportRecord(kind="from", module=None, names=("gcn",), line=1, level=1),
+            ),
+        ),
+        snapshots=tuple(
+            SnapshotContent(
+                snapshot_id=f"snap:{path}", commit_sha="c" * 40, path=path,
+                oid="o" * 40,
+                content_id=content_ids.get(path, f"c:{path}"),
+                status="parsed", media_type="python", language="python",
+                module=None, is_baseline=False, source_url="u",
+            )
+            for path in paths
+        ),
+    )
+    index = GitIndex(
+        selection=selection(
+            (commit("c" * 40, committed_at=DAY_ONE),),
+            (commit("b" * 40, committed_at=T0),),
+        ),
+        snapshots=tuple(tree(path) for path in paths),
+    )
+
+    mapped = map_imports(content, index, ids(), run_id=RUN_ID)
+
+    targets = {(edge.source, edge.target) for edge in mapped.relationships}
+    assert (ids().file("models/gcn.py"), ids().module("models/graphnet.py")) in targets
+    assert (ids().file("tests/t.py"), ids().module("tf_gnns/models/gcn.py")) in targets
+    assert (ids().file("tests/t.py"), ids().module("tf_gnns/__init__.py")) in targets
+    assert (ids().file("models/__init__.py"), ids().module("models/gcn.py")) in targets
+    libraries = {e.properties["name"]: e for e in mapped.entities if e.labels == ("ExternalLibrary",)}
+    assert set(libraries) == {"torch", "os", "sys"}
+    assert libraries["os"].properties["dependency_kind"] == "stdlib"
+    assert (ids().module("models/gcn.py"), ids().library("torch")) in targets
+    # Same import seen twice maps once per commit.
+    assert len({edge.edge_id for edge in mapped.relationships}) == len(mapped.relationships)
+
+
+def test_map_classes_creates_class_entities_and_defined_at_edges():
+    from repo_history.content import CodeDocument, CodeSymbol, ImportRecord, ParsedContent
+    from repo_history.graph import DEFINED_AT, map_classes
+
+    def parsed(content_id, *symbols):
+        return ParsedContent(
+            content_id=content_id, blob_id=f"blob:{content_id}", oid="o" * 40,
+            media_type="python", status="parsed", language="python",
+            code=CodeDocument(language="python", imports=(), symbols=tuple(symbols)),
+        )
+
+    def sym(name, qualname, kind="class", line=1):
+        return CodeSymbol(
+            symbol_id=f"s:{qualname}", kind=kind, name=name, qualname=qualname,
+            line=line, column=0, end_line=line + 5,
+        )
+
+    snapshots = [
+        SnapshotContent(
+            snapshot_id="snap:a", commit_sha="c" * 40, path="models/gcn.py",
+            oid="o" * 40, content_id="c:a", status="parsed", media_type="python",
+            language="python", module="models.gcn", is_baseline=False, source_url="u",
+        ),
+    ]
+    content = ContentIndex(
+        contents=(
+            parsed("c:a", sym("GraphConv", "models.GraphConv"),
+                   sym("helper", "models.helper", kind="function")),
+        ),
+        snapshots=tuple(snapshots),
+    )
+    index = GitIndex(
+        selection=selection(
+            (commit("c" * 40, committed_at=DAY_ONE),),
+            (commit("b" * 40, committed_at=T0),),
+        ),
+        snapshots=(
+            TreeEntryRecord(
+                snapshot_id="snap:a", commit_sha="c" * 40, path="models/gcn.py",
+                object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+                is_binary=False, is_lfs_pointer=False, content_status="inspected",
+                source_url="u",
+            ),
+        ),
+    )
+
+    mapped = map_classes(content, index, ids(), run_id=RUN_ID)
+
+    by_id = {entity.logical_id: entity for entity in mapped.entities}
+    assert len(by_id) == 1  # functions are not nodes
+    class_id = next(iter(by_id))
+    assert by_id[class_id].labels == ("Class",)
+    assert by_id[class_id].properties["qualname"] == "models.GraphConv"
+    assert by_id[class_id].properties["line"] == 1
+    assert len(mapped.relationships) == 1
+    edge = mapped.relationships[0]
+    assert edge.edge_type == DEFINED_AT
+    assert edge.source == class_id
+    assert edge.target == ids().file("models/gcn.py")
+    assert edge.valid_from == DAY_ONE
+
+
+def stable_class_id(path, qualname):
+    from repo_history.ids import stable_id
+
+    return stable_id("class", ids().repository_id, path, qualname)
+
+
+def test_map_registry_and_assignments_cover_topics_and_about_edges():
+    registry = seed_registry(at=NOW)
+    registry, first = registry.register(
+        "sparse-training", at=NOW, created_by="test", ids=ids(),
+        description="sparse training graphs",
+    )
+    registry, second = registry.register(
+        "graph-convolution", at=NOW, created_by="test", ids=ids()
+    )
+    merged_registry, merged = registry.merge(
+        [first.topic_id, second.topic_id], "graph-learning",
+        at=NOW, created_by="test", ids=ids(),
+    )
+
+    mapped = map_registry(merged_registry, ids(), run_id=RUN_ID)
+
+    by_id = {entity.logical_id: entity for entity in mapped.entities}
+    assert set(by_id) == {first.topic_id, second.topic_id, merged.topic_id}
+    assert all(entity.labels == ("Topic",) for entity in by_id.values())
+    assert by_id[first.topic_id].properties["merged_into"] == merged.topic_id
+    assert by_id[merged.topic_id].properties["description"].startswith("sparse")
+    assert by_id[merged.topic_id].properties["supersedes"] == sorted(
+        [first.topic_id, second.topic_id]
+    )
+
+    assignments = [
+        topic_assignment("snap:guide", first.topic_id, "sparse-training"),
+        topic_assignment("workitem:github:10", merged.topic_id, "graph-learning"),
+        topic_assignment(
+        "workitem:github:10", "bug", "bug",
+        kind="provider", action="preserve",
+    ),
+    ]
+    linked = map_topic_assignments(assignments, ids(), run_id=RUN_ID)
+
+    assert len(linked.relationships) == 2
+    assert {edge.edge_type for edge in linked.relationships} == {ABOUT}
+    by_source = {edge.source: edge for edge in linked.relationships}
+    assert by_source["snap:guide"].target == first.topic_id
+    assert by_source[ids().work_item("github", 10)].target == merged.topic_id
+    assert all(edge.run_id == RUN_ID for edge in linked.relationships)
+    assert "no derived topic" in linked.skipped[0]
+
+
+def test_map_folders_creates_hierarchy_with_repo_root():
+    from repo_history.graph import BELONGS_TO, HAS_BRANCH, map_folders, map_repository_branches
+
+    mapped = map_folders(
+        ["models/gcn.py", "models/graphnet.py", "docs/guide.md", "README.md"],
+        ids(), run_id=RUN_ID, window_start=WINDOW.start,
+    )
+    by_id = {entity.logical_id: entity for entity in mapped.entities}
+    folders = {nid for nid, entity in by_id.items() if entity.labels == ("Folder",)}
+    assert len(folders) == 2
+    assert by_id[ids().repository_id].labels == ("Repository",)
+    folders_by_path = {
+        entity.properties["path"]: nid
+        for nid, entity in by_id.items()
+        if entity.labels == ("Folder",)
+    }
+    assert set(folders_by_path) == {"models", "docs"}
+    belongs = [edge for edge in mapped.relationships if edge.edge_type == BELONGS_TO]
+    # Files link only to their immediate parent; folders chain upward.
+    assert {(edge.source, edge.target) for edge in belongs} == {
+        (ids().file("models/gcn.py"), folders_by_path["models"]),
+        (ids().file("models/graphnet.py"), folders_by_path["models"]),
+        (ids().file("docs/guide.md"), folders_by_path["docs"]),
+        (ids().file("README.md"), ids().repository_id),
+    }
+    assert all(edge.properties.get("hierarchical") is True for edge in belongs)
+    has_folders = [edge for edge in mapped.relationships if edge.edge_type == "HAS_FOLDER"]
+    assert {(edge.source, edge.target) for edge in has_folders} == {
+        (ids().repository_id, folders_by_path["models"]),
+        (ids().repository_id, folders_by_path["docs"]),
+    }
+
+    nested = map_folders(["a/b/c.py"], ids(), run_id=RUN_ID, window_start=WINDOW.start)
+    nested_folders = {
+        entity.properties["path"]: nid
+        for nid, entity in {
+            entity.logical_id: entity for entity in nested.entities if entity.labels == ("Folder",)
+        }.items()
+    }
+    assert set(nested_folders) == {"a", "a/b"}
+    nested_belongs = {
+        (edge.source, edge.target)
+        for edge in nested.relationships
+        if edge.edge_type == "BELONGS_TO"
+    }
+    assert nested_belongs == {
+        (ids().file("a/b/c.py"), nested_folders["a/b"]),
+        (nested_folders["a/b"], nested_folders["a"]),
+    }
+    assert nested.entities[0].labels == ("Repository",)
+
+    branches = map_repository_branches(["main", "feat"], ids(), run_id=RUN_ID, window_start=WINDOW.start)
+    assert all(edge.edge_type == HAS_BRANCH for edge in branches.relationships)
+    assert {(edge.source, edge.target) for edge in branches.relationships} == {
+        (ids().repository_id, ids().branch("feat")),
+        (ids().repository_id, ids().branch("main")),
+    }
+    assert all(edge.properties.get("hierarchical") is True for edge in branches.relationships)
+
+
+def test_about_and_diff_edges_persist_and_count(tmp_path):
+    from repo_history.content import CodeDocument, ImportRecord, ParsedContent
+
+    boundary = commit("b" * 40, committed_at=T0)
+    tip = commit("c" * 40, parents=(boundary.sha,), committed_at=DAY_ONE)
+    index = git_index(selection((tip,), (boundary,)))
+    index = index.model_copy(update={"changes": (
+        FileChangeRecord(
+            change_id="change:tip:x", commit_sha=tip.sha, parent_sha=boundary.sha,
+            comparison="first-parent", path="x.py", status="added",
+            new_oid="o" * 40, source_url=f"{REPOSITORY_URL}/blob/{tip.sha}/x.py",
+        ),
+    )})
+    mapped = map_git_index(index, ids(), run_id=RUN_ID)
+    registry = seed_registry(at=NOW)
+    registry, topic = registry.register(
+        "sparse-training", at=NOW, created_by="test", ids=ids()
+    )
+    topics = map_registry(registry, ids(), run_id=RUN_ID)
+    about = map_topic_assignments(
+        [topic_assignment("snap:guide", topic.topic_id, "sparse-training")],
+        ids(), run_id=RUN_ID,
+    )
+    content = ContentIndex(
+        contents=(
+            ParsedContent(
+                content_id="c:x", blob_id="b:x", oid="o" * 40, media_type="python",
+                status="parsed", language="python", text="import os\n",
+                code=CodeDocument(
+                    language="python",
+                    imports=(ImportRecord(kind="import", module=None, names=("os",), line=1),),
+                ),
+            ),
+        ),
+        snapshots=(
+            SnapshotContent(
+                snapshot_id="snap:tip", commit_sha=tip.sha, path="x.py",
+                oid="o" * 40, content_id="c:x", status="parsed",
+                media_type="python", language="python", module=None,
+                is_baseline=False, source_url="u",
+            ),
+        ),
+    )
+    diffs = map_diffs(content, index, ids(), run_id=RUN_ID)
+
+    sink = sink_at(tmp_path)
+    sink.write_entities(
+        [*mapped.entities, *topics.entities, *diffs.entities], analysis_run_id=RUN_ID
+    )
+    sink.write_relationships(
+        [*mapped.relationships, *about.relationships, *diffs.relationships],
+        analysis_run_id=RUN_ID,
+    )
+
+    assert sink.label_counts()["Topic"] == 1
+    assert sink.label_counts()["Diff"] == 1
+    assert sink.edge_counts()["TOUCHES"] == 1
+    assert sink.edge_counts()["CHANGES"] == 1
+    assert sink.edge_counts()["ABOUT"] == 1
+    found = sink.find_nodes("Topic", "name", "sparse-training")
+    assert len(found) == 1
+    assert found[0]["prov_run_id"] == RUN_ID
+    sink.close()
+
+
 # ---------------------------------------------------------------------------
 # Sink writes and reads
 # ---------------------------------------------------------------------------
+
+
+def test_file_entities_carry_language_and_edges_flag_hierarchy(tmp_path):
+    boundary = commit("b" * 40, committed_at=T0)
+    tip = commit("c" * 40, parents=(boundary.sha,), committed_at=DAY_ONE)
+    mapped = map_git_index(git_index(selection((tip,), (boundary,))), ids(), run_id=RUN_ID)
+
+    files = [entity for entity in mapped.entities if entity.labels == ("File",)]
+    assert files and all(entity.properties["path"] == "x.py" for entity in files)
+    assert all(entity.properties["language"] == "python" for entity in files)
+    assert all(entity.properties["media_type"] == "python" for entity in files)
+
+    hierarchical = {
+        edge.edge_type
+        for edge in mapped.relationships
+        if edge.properties.get("hierarchical") is True
+    }
+    assert {"PARENT_COMMIT", "MEMBER_OF", "OF_FILE", "TIP_OF"} <= hierarchical
+    assert "TOUCHES" not in {edge.edge_type for edge in mapped.relationships}
 
 
 def test_sink_round_trip_with_provenance(tmp_path):

@@ -7,7 +7,7 @@ calls).  Flags opt in to more:
 - ``--llm``: exercise one enabled LangChain model call (needs OPENAI_API_KEY).
 
 The run is idempotent across invocations: stages checkpoint in
-``/tmp/opencode/rh12-eval`` and a rerun skips completed stages, writes no
+``/tmp/opencode/rh12-eval-code-v2`` and a rerun skips completed stages, writes no
 duplicates, and spends no additional budget.  Results go to
 ``examples/evaluation.md`` and ``examples/run-manifest.json``.
 """
@@ -33,8 +33,34 @@ from repo_history.evaluate import (
 )
 from repo_history.git import GitHistory
 from repo_history.github import EvidenceCache, GitHubCredentials, GitHubDiscoverer
-from repo_history.graph import GraphSink, map_discovery, map_git_index
+from repo_history.graph import (
+    BELONGS_TO,
+    CHANGES,
+    DEFINED_AT,
+    GraphSink,
+    HAS_BRANCH,
+    HAS_FOLDER,
+    IMPORTS,
+    map_code_components,
+    map_diffs,
+    map_discovery,
+    map_folders,
+    map_git_index,
+    map_imports,
+    map_registry,
+    map_repository_branches,
+    map_topic_assignments,
+)
 from repo_history.ids import IdFactory
+from repo_history.labeling import (
+    DeterministicLabeler,
+    assign_commit,
+    extract_snapshot_features,
+    extract_work_item_features,
+    register_prevalent,
+    seed_commit_type_registry,
+    seed_structural_registry,
+)
 from repo_history.models import LLMSettings
 from repo_history.orchestration import (
     JournalManifest,
@@ -44,7 +70,7 @@ from repo_history.orchestration import (
     software_version,
 )
 
-EVAL_ROOT = Path("/tmp/opencode/rh12-eval")
+EVAL_ROOT = Path("/tmp/opencode/rh12-eval-code-v2")
 RUN_ID = "live-eval"
 
 
@@ -52,7 +78,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Bounded live evaluation")
     parser.add_argument("--online", action="store_true")
     parser.add_argument("--llm", action="store_true")
+    parser.add_argument("--state-root", type=Path, default=EVAL_ROOT,
+                        help="Use a fresh directory when the graph schema changes")
     args = parser.parse_args()
+    eval_root = args.state_root
 
     overall_start = time.perf_counter()
     started_at = datetime.now(timezone.utc)
@@ -61,7 +90,7 @@ def main() -> None:
     timings: dict[str, float] = {}
     notes: list[str] = []
 
-    EVAL_ROOT.mkdir(parents=True, exist_ok=True)
+    eval_root.mkdir(parents=True, exist_ok=True)
     manifest = JournalManifest(
         run_id=RUN_ID,
         repository_id=ids.repository_id,
@@ -74,8 +103,8 @@ def main() -> None:
         created_at=started_at,
     )
     runner = StageRunner.resume_or_create(
-        EVAL_ROOT / "events.jsonl",
-        EVAL_ROOT / "checkpoint.json",
+        eval_root / "events.jsonl",
+        eval_root / "checkpoint.json",
         manifest,
         config.budgets,
     )
@@ -186,7 +215,53 @@ def main() -> None:
     def graph_stage():
         ran.add("graph")
         with Timer() as timer:
-            graph_path = str(EVAL_ROOT / "graph")
+            labeler = DeterministicLabeler(config.labeling)
+            all_paths = sorted({snapshot.path for snapshot in index.snapshots})
+            registry = seed_structural_registry(
+                all_paths, at=started_at, created_by=RUN_ID, ids=ids
+            )
+            registry = seed_commit_type_registry(
+                at=started_at, created_by=RUN_ID, ids=ids, base=registry
+            )
+            file_features = [
+                extract_snapshot_features(
+                    snap, content.content_for(snap.snapshot_id), subject_id=snap.snapshot_id
+                )
+                for snap in content.snapshots
+            ]
+            proposals: dict[str, list[str]] = {}
+            for features in file_features:
+                got = labeler.assign(
+                    features, registry, subject_id=features.subject_id,
+                    run_id=RUN_ID, info_horizon=started_at,
+                )
+                name = got.result.value.get("proposed_name")
+                if got.action == "propose" and name and registry.lookup(name) is None:
+                    proposals.setdefault(name, []).append(features.text())
+            registry, _ = register_prevalent(
+                registry, proposals, min_subjects=2, at=started_at,
+                created_by=RUN_ID, ids=ids,
+            )
+            file_assignments = [
+                labeler.assign(
+                    features, registry, subject_id=features.subject_id,
+                    run_id=RUN_ID, info_horizon=started_at,
+                )
+                for features in file_features
+            ]
+            touched: dict[str, list[str]] = {}
+            for entry in index.changes:
+                touched.setdefault(entry.commit_sha, []).append(entry.path)
+            records = (*selection.selected_commits, *selection.boundary_commits)
+            commit_assignments = [
+                assign_commit(
+                    record.message, touched.get(record.sha, []), registry,
+                    subject_id=ids.commit(record.sha), run_id=RUN_ID,
+                    info_horizon=started_at, ids=ids,
+                )
+                for record in records
+            ]
+            graph_path = str(eval_root / "graph")
             graph_settings = config.graph.model_copy(update={"path": graph_path})
             sink = (
                 GraphSink.open(graph_settings, run_id=RUN_ID)
@@ -196,21 +271,38 @@ def main() -> None:
             try:
                 git_mapped = map_git_index(index, ids, run_id=RUN_ID)
                 gh_mapped = map_discovery(discovery, ids, run_id=RUN_ID)
-                entities = sink.write_entities(
-                    [*git_mapped.entities, *gh_mapped.entities], analysis_run_id=RUN_ID
+                folders_mapped = map_folders(
+                    [snapshot.path for snapshot in content.snapshots],
+                    ids, run_id=RUN_ID, window_start=config.repository.window.start,
                 )
-                relationships = sink.write_relationships(
-                    [*git_mapped.relationships, *gh_mapped.relationships],
-                    analysis_run_id=RUN_ID,
+                branches_mapped = map_repository_branches(
+                    [branch.name for branch in index.branches],
+                    ids, run_id=RUN_ID, window_start=config.repository.window.start,
                 )
+                topics_mapped = map_registry(registry, ids, run_id=RUN_ID)
+                about_mapped = map_topic_assignments(
+                    [*file_assignments, *commit_assignments], ids, run_id=RUN_ID
+                )
+                components_mapped = map_code_components(content, index, ids, run_id=RUN_ID)
+                imports_mapped = map_imports(content, index, ids, run_id=RUN_ID)
+                diffs_mapped = map_diffs(content, index, ids, run_id=RUN_ID)
+                all_entities = [
+                    *git_mapped.entities, *gh_mapped.entities,
+                    *folders_mapped.entities, *topics_mapped.entities,
+                    *components_mapped.entities, *imports_mapped.entities, *diffs_mapped.entities,
+                ]
+                all_relationships = [
+                    *git_mapped.relationships, *gh_mapped.relationships,
+                    *folders_mapped.relationships, *branches_mapped.relationships,
+                    *about_mapped.relationships, *components_mapped.relationships,
+                    *imports_mapped.relationships, *diffs_mapped.relationships,
+                ]
+                entities = sink.write_entities(all_entities, analysis_run_id=RUN_ID, defer_indexes=True)
+                relationships = sink.write_relationships(all_relationships, analysis_run_id=RUN_ID, defer_indexes=True)
+                sink.rebuild_deferred()
                 # Same-run duplicate ingestion must be fully skipped.
-                dup_entities = sink.write_entities(
-                    [*git_mapped.entities, *gh_mapped.entities], analysis_run_id=RUN_ID
-                )
-                dup_relationships = sink.write_relationships(
-                    [*git_mapped.relationships, *gh_mapped.relationships],
-                    analysis_run_id=RUN_ID,
-                )
+                dup_entities = sink.write_entities(all_entities, analysis_run_id=RUN_ID, defer_indexes=True)
+                dup_relationships = sink.write_relationships(all_relationships, analysis_run_id=RUN_ID, defer_indexes=True)
                 state["graph_counts"] = (
                     entities.entities_written,
                     relationships.relationships_written,
@@ -247,7 +339,7 @@ def main() -> None:
                         enabled=True, privacy_consent=True, provider="openai",
                         model="gpt-4.1-mini", temperature=0.0, max_attempts=2,
                         prompt_version="v1",
-                        cache_file=str(EVAL_ROOT / "llm-cache.json"),
+                        cache_file=str(eval_root / "llm-cache.json"),
                     )
                     model = build_chat_model(settings)
                     enricher = Enricher(
@@ -313,9 +405,9 @@ def main() -> None:
         },
         budgets=summarize_ledger(runner.ledger),
         storage={
-            "graph": storage_bytes(EVAL_ROOT / "graph"),
-            "journal": storage_bytes(EVAL_ROOT / "events.jsonl"),
-            "llm_cache": storage_bytes(EVAL_ROOT / "llm-cache.json"),
+            "graph": storage_bytes(eval_root / "graph"),
+            "journal": storage_bytes(eval_root / "events.jsonl"),
+            "llm_cache": storage_bytes(eval_root / "llm-cache.json"),
         },
         quality={},
         gaps=tuple(gaps),

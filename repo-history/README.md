@@ -6,7 +6,7 @@ pinned, bounded slice of [`mylonasc/tf_gnns`](https://github.com/mylonasc/tf_gnn
 and keeps source evidence, normalized history, and derived analysis distinct.
 
 The epic specification is
-[`../EPIC_01_REPO_HISTORY_EXAMPLE.md`](../EPIC_01_REPO_HISTORY_EXAMPLE.md).
+[`./EPIC_01_REPO_HISTORY_EXAMPLE.md`](./EPIC_01_REPO_HISTORY_EXAMPLE.md).
 
 ## Development
 
@@ -40,6 +40,9 @@ Nothing in the pipeline mutates the target repository, opens sockets except
 through those two gates, or invents history: unavailable source history is
 reported as explicit coverage gaps.  `examples/evaluate.py` reproduces the
 bounded live evaluation; pass `--llm` only with consent and a key.
+Use `--state-root /path/to/fresh-state` when changing the graph schema so an
+old completed checkpoint cannot silently skip the new mapping. Bulk graph
+writes defer index rebuilding until the final verification reads.
 
 ## Content extraction
 
@@ -54,16 +57,36 @@ extractor = ContentExtractor.from_history(history)
 content_index = extractor.extract(index)
 ```
 
-Parsing is keyed by `(blob oid, media type)`, so identical bytes are parsed once
-while every snapshot keeps its own `snapshot_id`, commit, path, and source URL.
+Parsing identities include blob ID, media type, language, adapter version, and
+extraction policy. Identical inputs are parsed once while every snapshot keeps
+its own `snapshot_id`, commit, path, and source URL.
 Markdown headings, links, fenced code blocks, and sections carry character
 offsets and line ranges into the original blob; Python files are inspected with
-`ast` only and are never imported or executed.
+ASTs for definitions and tree-sitter for imports, never imported or executed.
+Python encoding declarations are honored. `code_models.SourceCodeParser` is a
+typed, text-to-structure adapter contract; `code_parsers` can be supplied to the
+extractor constructor or `from_history` to add language backends independently
+of Git, persistence, and the viewer.
+
+Python import syntax now uses **incremental tree-sitter parsing** when the
+file's first-parent tree is available. Extraction processes commits in causal
+order (not timestamp/SHA order), follows rename/copy paths, and edits a copy of
+the cached parent tree before passing it to tree-sitter. UTF-8 byte offsets and
+line/column edits are computed from the decoded text; separate branches never
+mutate their shared parent's tree. Trees are transient, not checkpoint data.
+Missing parent trees fall back to full parsing; identical blobs still reuse
+their cached extraction results. AST definition extraction and import-record
+traversal remain whole-document operations, so this is not a claim that every
+analysis stage is incremental. Optional `IncrementalSourceCodeParser` adapters
+extend the ordinary parser contract without requiring other adapters to change.
+The default Python adapter exposes actual tree-sitter call counts through
+`extractor.code_parsers["python"].counters`.
 
 Statuses are explicit: `parsed`, `empty`, `unsupported` (binary or Git LFS
 pointer), `oversized`, `undecodable`, `gitlink`, and `unavailable`. Each
-non-parsed status emits a `CoverageGap`, as do truncated section, symbol, and
-import lists, so configured limits stay observable in the output.
+unsupported/oversized/undecodable/unavailable status emits a `CoverageGap`, as
+do syntax errors and truncated section, symbol, and import lists. Empty files
+and Git links are recorded without inventing source content.
 
 ## GitHub work items and evidence
 
@@ -162,11 +185,43 @@ sink.write_relationships(mapped.relationships, analysis_run_id=run_id)
 sink.close()
 ```
 
-`map_git_index` emits `Commit`, `Snapshot`, `File`, and `Branch` entities with
-`PARENT_COMMIT`, `MEMBER_OF`, `OF_FILE`, and `TIP_OF` relationships;
-`map_discovery` emits `WorkItem` and `ProviderLabel` entities with `HAS_LABEL`,
-`CHILD_OF`, and `MERGED_AS` relationships. Out-of-scope parents and hierarchy
-edges are skipped, never invented.
+`map_git_index` emits `Commit`, `Snapshot`, `File` (with detected language
+and media type), and `Branch` entities with `PARENT_COMMIT`, `MEMBER_OF`,
+and `OF_FILE` relationships plus `TIP_OF` branch links. `map_diffs` turns
+each changed file into a `Diff` entity with status, a bounded unified patch,
+and comparison provenance. Commits reach diffs through `TOUCHES`; diffs reach
+files through `CHANGES` and changed definitions through `AFFECTS`.
+Diffs also explicitly `AFFECTS` their observed local Python modules, including
+import-only and top-level edits that do not change a class/function. These
+module links carry `basis: file-change`, change status, and before/after sides;
+symbol links still require before/after source differences. Deletions reach the
+previous module, renames reach both path identities, and copies reach only the
+destination. Namespace/external-module changes are not inferred transitively.
+`map_code_components` emits separate `Module`, `Class`, `Function`, `Method`,
+and `Field` entities with `DEFINED_AT` file links and immediate lexical
+`BELONGS_TO` ownership. `map_classes` remains a class-only compatibility view.
+`map_imports` resolves Python imports to module/symbol targets against the
+importing commit's tree (aliases, relative imports, source layouts, namespaces,
+and explicit re-exports). External modules link to `ExternalLibrary` nodes
+through `PROVIDED_BY`; importing local modules link through `DEPENDS_ON`.
+Libraries carry observed import-root identities, **not guessed distribution
+names or installed versions**; stdlib and third-party/unresolved roots are
+distinguished. Source extraction never imports project code. Static-analysis
+limits: definition/dependency edges are source evidence, not proof of runtime
+behavior. Dynamic imports, monkey patching, and call graphs are out of scope,
+and retained definitions need end-of-presence reconciliation before being
+treated as currently active.
+`map_folders` emits `Folder` entities, a single `Repository` root, and
+immediate-parent `BELONGS_TO` file→folder and folder→folder edges (plus
+`HAS_BRANCH` repo→branch edges via `map_repository_branches`). Containment
+and ancestry edges (`PARENT_COMMIT`, `MEMBER_OF`, `OF_FILE`, `TOUCHES`,
+`CHANGES`, `BELONGS_TO`, `HAS_BRANCH`, `HAS_FOLDER`, `TIP_OF`, `CHILD_OF`,
+`DEFINED_AT`) carry `hierarchical: true` provenance for a stronger
+configurable pull. `map_discovery` emits `WorkItem` and `ProviderLabel` entities
+with `HAS_LABEL`, `CHILD_OF`, and `MERGED_AS` relationships; `map_registry`
+emits `Topic` entities and `map_topic_assignments` emits `ABOUT` edges from
+deterministic topic assignments (commits, files, and work items). Out-of-scope
+parents and hierarchy edges are skipped, never invented.
 
 Version IDs are deterministic UUIDs, so ingesting the same batch twice is
 idempotent: the driver rejects the duplicate ID and the sink skips it after
@@ -209,8 +264,19 @@ subject, method, horizon, and evidence. Growing the registry (registrations,
 aliases, merges) never rewrites old assignments: they reference the registry
 version they were decided against, merges mark old topics as superseded
 instead of deleting them, and re-running against a kept registry snapshot
-reproduces the original decisions exactly. `LabelingSettings` (`[labeling]`
-section) sets the reuse/alias thresholds, minimum score, and retrieval limit.
+reproduces the original decisions exactly.
+
+Topic modeling favors prevalent aspects of the architecture over singletons.
+`seed_structural_registry` seeds one topic per well-populated top-level
+directory (shared vocabulary pulls its files into reuse instead of proposing
+one-off names); `seed_commit_type_registry` seeds commit-type topics
+(bug-fix, refactoring, feature, documentation, testing, build-ci,
+version-release) decided deterministically from message keywords and touched
+paths (`classify_commit`, `assign_commit`). `register_prevalent` only
+registers a proposal shared by at least `min_subjects` subjects, so one-off
+phrases never become topics, and `topic_membership` reports prevalence per
+topic. `LabelingSettings` (`[labeling]` section) sets the reuse/alias
+thresholds, minimum score, and retrieval limit.
 
 ## LangChain structured LLM enrichment
 
@@ -330,3 +396,46 @@ is deterministic SVG (stdlib only): factual links are solid blue, inferred
 topical links are dashed amber, nodes are capped at a fixed budget with
 omissions reported, and the footer records run, horizon, counts, and gaps.
 `viz.render_slice_svg()` renders any bounded slice the same way.
+
+## Interactive D3 time-biased graph viewer
+
+`examples/build_viewer.py` exports the live slice to `examples/graph.json`
+and writes `examples/viewer.html`, a self-contained page (D3 loaded from
+CDN, with an offline data-table fallback) with a force-directed layout whose
+x-axis is time and whose y-axis follows the entity hierarchy
+(Repository → Branch → WorkItem → Commit → Topic → Diff → Folder → File → Module
+→ Class/Function → Method → Field). External libraries have their own node kind. All edge
+kinds are included — `PARENT_COMMIT`, `TIP_OF`, `TOUCHES` (commit→diff),
+`CHANGES` (diff→file), `AFFECTS` (diff→module/definition), `DEFINED_AT` (component→file),
+`IMPORTS` (file→module/symbol), `DEPENDS_ON` (module→library),
+`PROVIDED_BY` (external module→library), `CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`,
+`RELATED_TO` (provider and inferred), `BELONGS_TO`, `HAS_BRANCH`, and
+`ABOUT` (topic assignments). Files connect only to the commits that actually
+change them, via the Diff layer (commit→diff→file):
+
+- every timestamped node is normalized to `t` in `[0, 1]` across the graph;
+  an anchor force pulls every node toward the mid-time center while a second
+  force pulls left/right with strength growing with `|t - 0.5|`, so the plot
+  elongates along time as nodes appear.
+- a rank force pulls each kind toward its hierarchy tier (configurable
+  `hierarchy pull` slider); hierarchical edges (`PARENT_COMMIT`, `TOUCHES`,
+  `TIP_OF`, `BELONGS_TO`, …) also pull harder than associative ones via a
+  per-link strength multiplier (`hierarchical pull` slider).
+- files are colored by detected type (source vs docs vs other, toggleable
+  legend) instead of a single file color; folders group files by directory
+  under a single repository root; classes appear as named nodes linked to
+  their defining files. Selecting a file shows retained source text and
+  per-commit change history; selecting a diff shows its patch; components show
+  their source spans. Related-node links allow navigation through the graph.
+- nodes without timestamps (deleted branches, unobserved tips, the repository
+  root) stay centered with no time pull; snapshot occurrences aggregate to
+  file nodes and remote tracking refs resolve to PR head branches.
+- interactions: drag, zoom/pan, hover tooltips, click-to-focus neighborhoods
+  with provenance and evidence, kind/edge-type filters, label and time-color
+  toggles (files additionally colorable by detected type), a time-window
+  dimmer, text search, pause/reset, and sliders for anchor pull, time spread,
+  link distance and pull, hierarchical-link strength, and hierarchy pull.
+
+`viz_d3.build_viewer_data()` bounds the graph (`max_nodes`, core entities
+always kept, omissions reported) and `viz_d3.render_viewer_html()` embeds
+the payload deterministically.

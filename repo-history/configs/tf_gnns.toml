@@ -1,0 +1,80 @@
+[repository]
+provider = "github"
+owner = "mylonasc"
+name = "tf_gnns"
+url = "https://github.com/mylonasc/tf_gnns.git"
+anchor = "9bfe6c19c02723dbbf101b9e311de684a4728bb1"
+allowed_work_items = [10, 11, 12]
+
+[repository.window]
+start = "2026-09-13T00:00:00Z"
+end = "2026-09-15T00:00:00Z"
+
+[budgets]
+max_commits = 32
+max_work_items = 25
+max_api_requests = 100
+max_text_bytes = 2097152
+max_llm_requests = 16
+max_llm_input_tokens = 64000
+max_llm_output_tokens = 8000
+
+[git]
+max_depth = 256
+initial_fetch_depth = 64
+max_fetch_depth = 512
+skew_tolerance_seconds = 0
+rename_threshold = 50
+max_blob_bytes = 2097152
+
+[content]
+max_file_bytes = 2097152
+max_sections = 500
+max_symbols = 1000
+max_imports = 500
+
+[github]
+api_url = "https://api.github.com"
+token_env = "GITHUB_TOKEN"
+per_page = 50
+max_pages = 20
+timeout_seconds = 20.0
+max_retries = 2
+max_rate_limit_wait_seconds = 60.0
+max_response_bytes = 2097152
+required_scopes = []
+user_agent = "gestaltdb-repo-history-example/0.1"
+
+[orchestration]
+journal_file = "data/journal/events.jsonl"
+checkpoint_file = "data/journal/checkpoint.json"
+
+[graph]
+path = "data/graph"
+backend = "lmdb"
+overwrite = false
+map_size_bytes = 268435456
+
+[labeling]
+reuse_threshold = 0.5
+alias_threshold = 0.35
+min_score = 0.1
+top_k = 5
+
+[linking]
+min_inference_score = 0.3
+
+[llm]
+enabled = false
+provider = "openai"
+model = "gpt-4.1-mini"
+temperature = 0.0
+privacy_consent = false
+max_attempts = 2
+prompt_version = "v1"
+cache_file = "data/llm/cache.json"
+
+[runtime]
+data_root = "data"
+cache_dir = "data/cache"
+offline = false

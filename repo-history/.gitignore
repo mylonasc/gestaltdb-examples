@@ -1,0 +1,11 @@
+.venv/
+data/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Recorded offline fixtures are committed intentionally.
+!tests/data/
+!tests/data/**

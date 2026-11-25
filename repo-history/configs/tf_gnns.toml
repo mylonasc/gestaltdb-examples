@@ -49,6 +49,12 @@ user_agent = "gestaltdb-repo-history-example/0.1"
 journal_file = "data/journal/events.jsonl"
 checkpoint_file = "data/journal/checkpoint.json"
 
+[graph]
+path = "data/graph"
+backend = "lmdb"
+overwrite = false
+map_size_bytes = 268435456
+
 [llm]
 enabled = false
 provider = "openai"

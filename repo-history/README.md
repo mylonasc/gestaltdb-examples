@@ -124,3 +124,36 @@ per-boundary bootstrap state from in-window replay, and `visible_at` gates
 enrichment by information horizon so future labels, docs, or async results
 cannot seed past decisions. Unavailable history stays a retryable gap; nothing
 is invented for it.
+
+## GestaltDB temporal graph persistence
+
+`GraphSink` is the single writer: it owns the database handle, stamps every
+version with provenance (`prov_run_id`, origin event, information horizon,
+evidence IDs), and records the run in each temporal commit's metadata:
+
+```python
+from repo_history.graph import GraphSink, map_discovery, map_git_index
+
+mapped = map_git_index(index, ids, run_id=run_id)
+sink = GraphSink.create(config.graph, run_id=run_id, overwrite=True)
+sink.write_entities(mapped.entities, analysis_run_id=run_id, defer_indexes=True)
+sink.write_relationships(mapped.relationships, analysis_run_id=run_id)
+sink.close()
+```
+
+`map_git_index` emits `Commit`, `Snapshot`, `File`, and `Branch` entities with
+`PARENT_COMMIT`, `MEMBER_OF`, `OF_FILE`, and `TIP_OF` relationships;
+`map_discovery` emits `WorkItem` and `ProviderLabel` entities with `HAS_LABEL`,
+`CHILD_OF`, and `MERGED_AS` relationships. Out-of-scope parents and hierarchy
+edges are skipped, never invented.
+
+Version IDs are deterministic UUIDs, so ingesting the same batch twice is
+idempotent: the driver rejects the duplicate ID and the sink skips it after
+verifying the stored payload. Corrections (`correct_entity`,
+`correct_relationship`) append superseding versions; old evidence is retained
+and readable via `node_history` and `node_as_of`. The mutable current
+projection (`current_node`, `find_nodes`, `neighbors`) is rebuildable by
+replaying the journal into a fresh database. Bulk loads use `defer_indexes`;
+every read path rebuilds stale indexes first, since the driver refuses
+temporal and indexed queries while they are stale. `GraphSettings` (`[graph]`
+section) sets the path, backend, overwrite flag, and LMDB map size.

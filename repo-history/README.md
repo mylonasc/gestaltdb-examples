@@ -250,3 +250,34 @@ horizon and record the worker PID; merging sorts by horizon so out-of-order
 completion cannot publish future context into an earlier event. Repeats are
 byte-identical by `job_id`, and the coordinator charges the shared ledger only
 for accepted optional usage.
+
+## Evidence-backed cross-entity linking
+
+`linking.py` resolves textual references (`#123`, `owner/repo#123`, issue/PR
+URLs, commit SHAs, known file paths) and provider relationships (merged PRs,
+head/base branches) against known entities only. Unresolved numbers, foreign
+repositories, unknown or ambiguous SHAs, and deleted branches are reported as
+references, never invented into links:
+
+```python
+from repo_history.linking import (
+    infer_topical_links,
+    resolve_provider_links,
+    resolve_textual_links,
+)
+
+text_report = resolve_textual_links(texts, ids=ids, ...)
+provider_report = resolve_provider_links(discovery, index, ids=ids, ...)
+topic_report = infer_topical_links(item_topics, file_topics, ids=ids, ...)
+```
+
+Relations stay distinct: `MENTIONS` (textual reference), `INTENDS_TO_RESOLVE`
+(fix/close/resolve intent, never inferred from `Merge pull request` lines),
+`CLOSED_BY` (provider closure: merged PR to merge commit, with squash
+evidence as `merge_style: non-head` and no invented ancestry), and
+`RELATED_TO` (scored inference: shared derived topics, branch association).
+Weak topical overlap abstains with its score instead of linking.
+`LinkRecord.to_result()` wraps each link as an analysis envelope, and
+`link_edge_writes()` maps accepted links to single-writer relationship
+writes. `score_links()` measures precision/recall over annotated fixtures.
+`LinkingSettings` (`[linking]` section) sets the inference score floor.

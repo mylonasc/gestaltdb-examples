@@ -1,0 +1,1723 @@
+{
+ "nodes": [
+  {
+   "id": "branch:0b2e92af831ea39301a4e820",
+   "kind": "Branch",
+   "label": "origin/feat/gcn-sparse-bench",
+   "title": "refs/remotes/origin/feat/gcn-sparse-bench @ bdd121fc",
+   "time": null,
+   "props": {
+    "name": "origin/feat/gcn-sparse-bench",
+    "ref": "refs/remotes/origin/feat/gcn-sparse-bench",
+    "tip_sha": "bdd121fcc6b143dbb326db7faba1310f48b5f054",
+    "source": "remote"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": null
+  },
+  {
+   "id": "branch:19adad400dc7d902b8ab9e09",
+   "kind": "Branch",
+   "label": "origin/main",
+   "title": "refs/remotes/origin/main @ dd3f85bf",
+   "time": null,
+   "props": {
+    "name": "origin/main",
+    "ref": "refs/remotes/origin/main",
+    "tip_sha": "dd3f85bffc807217e7a81f9f693ef275a585f12c",
+    "source": "remote"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": null
+  },
+  {
+   "id": "branch:55c2c8b15d18a4e6c738a15a",
+   "kind": "Branch",
+   "label": "version_bump \u26a0",
+   "title": "version_bump (unobserved tip)",
+   "time": null,
+   "props": {
+    "name": "version_bump",
+    "source": "unobserved",
+    "status": "deleted or outside slice"
+   },
+   "prov": {
+    "method": "link-provider",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": null
+  },
+  {
+   "id": "branch:60f26dc117b7e4b2394025ba",
+   "kind": "Branch",
+   "label": "origin/fix/torch-backend-ci-matrix",
+   "title": "refs/remotes/origin/fix/torch-backend-ci-matrix @ eff6dff4",
+   "time": null,
+   "props": {
+    "name": "origin/fix/torch-backend-ci-matrix",
+    "ref": "refs/remotes/origin/fix/torch-backend-ci-matrix",
+    "tip_sha": "eff6dff4cbe5a734871df7cc92ba21c5f7c52ffd",
+    "source": "remote"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": null
+  },
+  {
+   "id": "branch:780cd5981252bf84ebaecfb4",
+   "kind": "Branch",
+   "label": "agentic-doc-metaskill \u26a0",
+   "title": "agentic-doc-metaskill (unobserved tip)",
+   "time": null,
+   "props": {
+    "name": "agentic-doc-metaskill",
+    "source": "unobserved",
+    "status": "deleted or outside slice"
+   },
+   "prov": {
+    "method": "link-provider",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": null
+  },
+  {
+   "id": "branch:788e9997f2122ccb5fd91ca4",
+   "kind": "Branch",
+   "label": "origin/feat/keras3-backend-agnostic-test",
+   "title": "refs/remotes/origin/feat/keras3-backend-agnostic-test @ 9ebf7c0d",
+   "time": null,
+   "props": {
+    "name": "origin/feat/keras3-backend-agnostic-test",
+    "ref": "refs/remotes/origin/feat/keras3-backend-agnostic-test",
+    "tip_sha": "9ebf7c0dc26a8d72bbac66e370fa078c6673e8d0",
+    "source": "remote"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": null
+  },
+  {
+   "id": "branch:8dab0e6115266416d3d21242",
+   "kind": "Branch",
+   "label": "origin/agentic-doc-metaskill",
+   "title": "refs/remotes/origin/agentic-doc-metaskill @ 0f05ec00",
+   "time": "2026-09-14T20:31:13+00:00",
+   "props": {
+    "name": "origin/agentic-doc-metaskill",
+    "ref": "refs/remotes/origin/agentic-doc-metaskill",
+    "tip_sha": "0f05ec009fcc7e244b044273103ccc74546ee883",
+    "source": "remote"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9996524808081394
+  },
+  {
+   "id": "branch:95e9091d20e4af779c24a9f4",
+   "kind": "Branch",
+   "label": "main",
+   "title": "refs/heads/main @ dd3f85bf",
+   "time": null,
+   "props": {
+    "name": "main",
+    "ref": "refs/heads/main",
+    "tip_sha": "dd3f85bffc807217e7a81f9f693ef275a585f12c",
+    "source": "local"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": null
+  },
+  {
+   "id": "branch:f5cd4294cf00969f2bc95a90",
+   "kind": "Branch",
+   "label": "origin/release/0.3.0",
+   "title": "refs/remotes/origin/release/0.3.0 @ cd38f766",
+   "time": null,
+   "props": {
+    "name": "origin/release/0.3.0",
+    "ref": "refs/remotes/origin/release/0.3.0",
+    "tip_sha": "cd38f76656f72849211f9b5df12ceb5c48cbad31",
+    "source": "remote"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": null
+  },
+  {
+   "id": "commit:063e6e4c27363d21cd1deca0",
+   "kind": "Commit",
+   "label": "7464e12d updated uv locl",
+   "title": "updated uv locl\n",
+   "time": "2026-09-14T20:49:46+00:00",
+   "props": {
+    "sha": "7464e12d5751bf6b6bdb9258b05d18163f2369a4",
+    "message": "updated uv locl",
+    "committed_at": "2026-09-14T20:49:46+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/7464e12d5751bf6b6bdb9258b05d18163f2369a4"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9997965362496816
+  },
+  {
+   "id": "commit:080c0ced7ad161a15025e978",
+   "kind": "Commit",
+   "label": "3eaddf86 Add pylib-agent-benchmarking s",
+   "title": "Add pylib-agent-benchmarking skill with in-skill tf_gnns benchmarks\n",
+   "time": "2026-09-13T22:44:45+00:00",
+   "props": {
+    "sha": "3eaddf86000fd0a496496c6cb9ade4cbcb7b8adc",
+    "message": "Add pylib-agent-benchmarking skill with in-skill tf_gnns benchmarks",
+    "committed_at": "2026-09-13T22:44:45+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/3eaddf86000fd0a496496c6cb9ade4cbcb7b8adc"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9895067324239418
+  },
+  {
+   "id": "commit:158b5bb8a528ecdcf9df21c2",
+   "kind": "Commit",
+   "label": "6324b89c Merge pull request #12 from my",
+   "title": "Merge pull request #12 from mylonasc/version_bump\n\nupdated uv locl",
+   "time": "2026-09-14T20:51:10+00:00",
+   "props": {
+    "sha": "6324b89cd52dceb9963e44cb5c3e1716dd5a1698",
+    "message": "Merge pull request #12 from mylonasc/version_bump",
+    "committed_at": "2026-09-14T20:51:10+00:00",
+    "is_merge": true,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/6324b89cd52dceb9963e44cb5c3e1716dd5a1698"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9998074083584773
+  },
+  {
+   "id": "commit:2cacdc890770af3af7d551cd",
+   "kind": "Commit",
+   "label": "6c51068d docs: render architecture diag",
+   "title": "docs: render architecture diagram as image\n",
+   "time": "2026-07-21T19:21:11+00:00",
+   "props": {
+    "sha": "6c51068dde0196aa00bbb84be4998be1e2b691bf",
+    "message": "docs: render architecture diagram as image",
+    "committed_at": "2026-07-21T19:21:11+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/6c51068dde0196aa00bbb84be4998be1e2b691bf"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.3840578903553005
+  },
+  {
+   "id": "commit:30ac21cc63aa8a0f41e77fac",
+   "kind": "Commit",
+   "label": "1dbe1817 added also the metaskill for t",
+   "title": "added also the metaskill for the agent documentation\n",
+   "time": "2026-09-14T06:44:34+00:00",
+   "props": {
+    "sha": "1dbe18170c48b216434bb68851674795c0f93be0",
+    "message": "added also the metaskill for the agent documentation",
+    "committed_at": "2026-09-14T06:44:34+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/1dbe18170c48b216434bb68851674795c0f93be0"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.993232888853914
+  },
+  {
+   "id": "commit:434832f1718499a0fbd7632d",
+   "kind": "Commit",
+   "label": "4b510461 Fix trace rule: flag genuine a",
+   "title": "Fix trace rule: flag genuine agent_docs --examples executions\n\nThe old regex matched SKILL.md's own last-resort --examples mention inside\nskill-tool output, so it fired on every run. Require the bash tool JSON\n\"command\" context so it only fires on real executions.\n",
+   "time": "2026-09-14T18:05:05+00:00",
+   "props": {
+    "sha": "4b510461d37c52966f92df4f801d7c4c098f40f4",
+    "message": "Fix trace rule: flag genuine agent_docs --examples executions",
+    "committed_at": "2026-09-14T18:05:05+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/4b510461d37c52966f92df4f801d7c4c098f40f4"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9985176397376612
+  },
+  {
+   "id": "commit:476f0476aa26cfddca626fa8",
+   "kind": "Commit",
+   "label": "8dbca6ab Fix graph-indep benchmark prom",
+   "title": "Fix graph-indep benchmark prompt to use the actual GraphIndep API (no create_global_function kwarg)\n",
+   "time": "2026-09-14T06:56:13+00:00",
+   "props": {
+    "sha": "8dbca6abc40b63a8a4f57ffdb6cad6d88614cc67",
+    "message": "Fix graph-indep benchmark prompt to use the actual GraphIndep API (no create_global_function kwarg)",
+    "committed_at": "2026-09-14T06:56:13+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/8dbca6abc40b63a8a4f57ffdb6cad6d88614cc67"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9933233603306778
+  },
+  {
+   "id": "commit:548be473382c212bc88e9f86",
+   "kind": "Commit",
+   "label": "bb1ea48e Merge pull request #9 from myl",
+   "title": "Merge pull request #9 from mylonasc/release/0.3.0\n\nPrepare 0.3.0 release",
+   "time": "2026-06-17T11:06:06+00:00",
+   "props": {
+    "sha": "bb1ea48ec019e4ea3a3e7c526744f8db7e14e4c1",
+    "message": "Merge pull request #9 from mylonasc/release/0.3.0",
+    "committed_at": "2026-06-17T11:06:06+00:00",
+    "is_merge": true,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/bb1ea48ec019e4ea3a3e7c526744f8db7e14e4c1"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.0
+  },
+  {
+   "id": "commit:586c6bacbcb627aff75ae302",
+   "kind": "Commit",
+   "label": "bafc973e Add authoritative API signatur",
+   "title": "Add authoritative API signatures and output contracts to tf_gnns user docs\n",
+   "time": "2026-09-14T06:33:43+00:00",
+   "props": {
+    "sha": "bafc973e5effb04befb604e3bee9e4865bf62e69",
+    "message": "Add authoritative API signatures and output contracts to tf_gnns user docs",
+    "committed_at": "2026-09-14T06:33:43+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/bafc973e5effb04befb604e3bee9e4865bf62e69"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9931486300107478
+  },
+  {
+   "id": "commit:7c451c4fb61d880d2eb5ac19",
+   "kind": "Commit",
+   "label": "f787d50f Merge pull request #10 from my",
+   "title": "Merge pull request #10 from mylonasc/agentic-doc-metaskill\n\nAgentic doc metaskill - the library packages a skill that can be used to help coding agents make effective use of the library with fewer tokens. It also contains a skill that helps with benchmarking token efficiency when using the coding skill.  ",
+   "time": "2026-09-14T20:34:19+00:00",
+   "props": {
+    "sha": "f787d50f5bb8fc27b2ed0a0d3a0aa0a729e91eeb",
+    "message": "Merge pull request #10 from mylonasc/agentic-doc-metaskill",
+    "committed_at": "2026-09-14T20:34:19+00:00",
+    "is_merge": true,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/f787d50f5bb8fc27b2ed0a0d3a0aa0a729e91eeb"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9996765547633297
+  },
+  {
+   "id": "commit:8d1ef95c4d13bfa7e63c3938",
+   "kind": "Commit",
+   "label": "7cd81bd4 changes in skill",
+   "title": "changes in skill\n",
+   "time": "2026-09-14T20:03:08+00:00",
+   "props": {
+    "sha": "7cd81bd48367c652b6a43d6dddc817bd73397321",
+    "message": "changes in skill",
+    "committed_at": "2026-09-14T20:03:08+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/7cd81bd48367c652b6a43d6dddc817bd73397321"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9994343914828935
+  },
+  {
+   "id": "commit:af9a2e8d233d016aeed50c69",
+   "kind": "Commit",
+   "label": "9bfe6c19 Discourage probe-script experi",
+   "title": "Discourage probe-script experiments in the benchmark agent prompt; trust fetched contracts\n",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "sha": "9bfe6c19c02723dbbf101b9e311de684a4728bb1",
+    "message": "Discourage probe-script experiments in the benchmark agent prompt; trust fetched contracts",
+    "committed_at": "2026-09-14T21:15:58+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/9bfe6c19c02723dbbf101b9e311de684a4728bb1"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "commit:bfec6f2024c321c8c02e4662",
+   "kind": "Commit",
+   "label": "b4dade78 Add Core 6 benchmarks and fix ",
+   "title": "Add Core 6 benchmarks and fix doc examples\n\n- Add 6 new task YAMLs (09-14): factory-direct-uses, aggregation-modes,\n  save-load-roundtrip, configurations-recurrent-residual, data-semantics,\n  gcn-training-mode-forward.\n- graphnets.md: fix GNCellMLP example (int units, call before inspecting\n  all_weights), add graph_eval globals caveat and list-units warning.\n- graphs.md: replace broken GraphTuple.is_equal_by_value with field-wise\n  comparison; add -from+to / is_equal_by_value boundary notes.\n- backends.md: fix tf.concat axis and tf.is_finite for TF 2.21.\n- Regenerate api_index.json.\n",
+   "time": "2026-09-14T10:42:14+00:00",
+   "props": {
+    "sha": "b4dade7884ab8707d72713ebc0ce5959f7f1e22d",
+    "message": "Add Core 6 benchmarks and fix doc examples",
+    "committed_at": "2026-09-14T10:42:14+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/b4dade7884ab8707d72713ebc0ce5959f7f1e22d"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9950785587518405
+  },
+  {
+   "id": "commit:c0078cf487b06b1fc70501e4",
+   "kind": "Commit",
+   "label": "5a59e76e Make tf_gnns agent benchmarks ",
+   "title": "Make tf_gnns agent benchmarks pass by improving user docs\n\nBenchmarks now pass 8/8 under ollama/qwen3.8 with the packaged\ntf-gnns-user-docs skill. The main changes:\n\n- Expand agent_skill references: multi-graph batching, subgraph\n  extraction with edge_trimming_mode, assign_global check_shape,\n  GraphNetMLP with globals and explicit sizes, factory config with\n  composite aggregation and eval_tensor_dict/graph_tuple_eval parity,\n  SparseGCN edge weights and dtypes, documented GCNv2 ValueError\n  boundaries.\n- Add Environment/Agent Workflow guidance to SKILL.md so agents use\n  the uv project env and the docs tool instead of probing the\n  environment or reading library source.\n- Tighten the suite agent_prompt (read the matching topic, write the\n  solution immediately, avoid env spelunking) and raise task timeouts\n  to 600s.\n- Run validation commands with uv run python; add agent_docs CLI,\n  API index generator, docs tests, and lazy package-root exports.\n- Ignore agent_benchmark_results/.\n",
+   "time": "2026-09-13T23:56:57+00:00",
+   "props": {
+    "sha": "5a59e76e1b39d5de06cb61677bb899837276cc7d",
+    "message": "Make tf_gnns agent benchmarks pass by improving user docs",
+    "committed_at": "2026-09-13T23:56:57+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/5a59e76e1b39d5de06cb61677bb899837276cc7d"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9900674226061169
+  },
+  {
+   "id": "commit:cf59410e791fc189b895453c",
+   "kind": "Commit",
+   "label": "92d041fb updated version",
+   "title": "updated version\n",
+   "time": "2026-09-14T20:46:06+00:00",
+   "props": {
+    "sha": "92d041fb199838cb712462cadb368da4a4186340",
+    "message": "updated version",
+    "committed_at": "2026-09-14T20:46:06+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/92d041fb199838cb712462cadb368da4a4186340"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9997680616790263
+  },
+  {
+   "id": "commit:db9ed7088fc309ebcb51d4b5",
+   "kind": "Commit",
+   "label": "0f05ec00 added an index creation step b",
+   "title": "added an index creation step before running the tests (tests also check for agent skill and require the index to be available)\n",
+   "time": "2026-09-14T20:31:13+00:00",
+   "props": {
+    "sha": "0f05ec009fcc7e244b044273103ccc74546ee883",
+    "message": "added an index creation step before running the tests (tests also check for agent skill and require the index to be avai",
+    "committed_at": "2026-09-14T20:31:13+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/0f05ec009fcc7e244b044273103ccc74546ee883"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9996524808081394
+  },
+  {
+   "id": "commit:eb7c7f054684688f2b1c9fdb",
+   "kind": "Commit",
+   "label": "5042738d Restructure agent docs concept",
+   "title": "Restructure agent docs concept-first; fix GraphNetMLP global contract; shift benchmark params\n\nConcept-first topic pages: every reference page now leads with How It\nWorks, Decision Guide, Parameter Key Facts, Boundaries & Gotchas, and a\nMinimal Skeleton before Rules/API Signatures/Output Contract, with\nexamples moved to a final Example Gallery. Agent_docs gains a --concepts\nextraction mode and the SKILL.md and benchmark suite agent_prompt now\ndirect agents to read concepts first and treat examples as reference,\nnot templates.\n\nDocs accuracy fixes: GraphNetMLP always builds a global block and fails\nwithout global_attr + repetition keys (verified against models/\ngraphnet.py); the no-global path is GraphNetMPNN_MLP only. Example\nGallery now shows reading object-graph edge widths via edge_tensor.\n\nAPI index: generator now unions root and submodule __all__ but keeps a\nsubmodule name only when the reference docs mention it (GCNv2 added,\nmaybe_patch_ld_library_path_for_tensorflow excluded), and filters\nunderscore-prefixed names.\n\nBenchmark shifts: tasks 09-14 parametrize so copy-pasting doc examples\nfails (units/widths/cores/reps/training paths all diverge from the docs).\nTrace rules flag examples-before-concepts retrieval and /tmp probe\nscripts. New reference solutions verified for all six shifted tasks.\n",
+   "time": "2026-09-14T11:37:27+00:00",
+   "props": {
+    "sha": "5042738dd3055f05acfcd5d7ed8f59f713c4dade",
+    "message": "Restructure agent docs concept-first; fix GraphNetMLP global contract; shift benchmark params",
+    "committed_at": "2026-09-14T11:37:27+00:00",
+    "is_merge": false,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/5042738dd3055f05acfcd5d7ed8f59f713c4dade"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9955073598999352
+  },
+  {
+   "id": "commit:f1418e795d48cd60f01206ed",
+   "kind": "Commit",
+   "label": "3f7ea987 Merge pull request #11 from my",
+   "title": "Merge pull request #11 from mylonasc/version_bump\n\nupdated version",
+   "time": "2026-09-14T20:46:37+00:00",
+   "props": {
+    "sha": "3f7ea9879666c5b04fb5dfec8bab926a26079e42",
+    "message": "Merge pull request #11 from mylonasc/version_bump",
+    "committed_at": "2026-09-14T20:46:37+00:00",
+    "is_merge": true,
+    "url": "https://github.com/mylonasc/tf_gnns/commit/3f7ea9879666c5b04fb5dfec8bab926a26079e42"
+   },
+   "prov": {
+    "method": "git-history",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9997720740048914
+  },
+  {
+   "id": "file:6bb50dae1276d77db5a34be1",
+   "kind": "File",
+   "label": ".python-version",
+   "title": ".python-version",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "path": ".python-version"
+   },
+   "prov": {
+    "method": "linking",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:04995ef51971087ed269",
+   "kind": "Topic",
+   "label": "gcn-py",
+   "title": "gcn-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:04995ef51971087ed269"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:053e70facdbf34bceaea",
+   "kind": "Topic",
+   "label": "pyg-py",
+   "title": "pyg-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:053e70facdbf34bceaea"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:09061ee526f1b26ca880",
+   "kind": "Topic",
+   "label": "layout-md",
+   "title": "layout-md",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:09061ee526f1b26ca880"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:1175ee8e670e1abcab54",
+   "kind": "Topic",
+   "label": "models-py",
+   "title": "models-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:1175ee8e670e1abcab54"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:131207899d58c3ebb8db",
+   "kind": "Topic",
+   "label": "readme-md",
+   "title": "readme-md",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:131207899d58c3ebb8db"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:190a999e1ea37e427b48",
+   "kind": "Topic",
+   "label": "benchmarks-py",
+   "title": "benchmarks-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:190a999e1ea37e427b48"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:1d07605aad86a06001f2",
+   "kind": "Topic",
+   "label": "datastructures-py",
+   "title": "datastructures-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:1d07605aad86a06001f2"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:1ec0cbadb18fb1890476",
+   "kind": "Topic",
+   "label": "badge-py",
+   "title": "badge-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:1ec0cbadb18fb1890476"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:2ddd3cb7874b0477520b",
+   "kind": "Topic",
+   "label": "results-csv",
+   "title": "results-csv",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:2ddd3cb7874b0477520b"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:33cc2ee0eda1583b2bdd",
+   "kind": "Topic",
+   "label": "logoartwork-svg",
+   "title": "logoartwork-svg",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:33cc2ee0eda1583b2bdd"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:36c76bb8b1caf834e13d",
+   "kind": "Topic",
+   "label": "accordion-js",
+   "title": "accordion-js",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:36c76bb8b1caf834e13d"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:3df9fb8683aadeed4d79",
+   "kind": "Topic",
+   "label": "test-py",
+   "title": "test-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:3df9fb8683aadeed4d79"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:3e3870b6af4e390b9aaf",
+   "kind": "Topic",
+   "label": "loop-md",
+   "title": "loop-md",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:3e3870b6af4e390b9aaf"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:432a68b7e8be5f1856b4",
+   "kind": "Topic",
+   "label": "python-version",
+   "title": "python-version",
+   "time": "2026-09-14T20:46:27+00:00",
+   "props": {
+    "topic_id": "topic:432a68b7e8be5f1856b4"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9997707797062253
+  },
+  {
+   "id": "topic:442eaed6adeea67bba91",
+   "kind": "Topic",
+   "label": "graphnet-ipynb",
+   "title": "graphnet-ipynb",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:442eaed6adeea67bba91"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:48d9ff0be3f918dc2ce0",
+   "kind": "Topic",
+   "label": "gitignore",
+   "title": "gitignore",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:48d9ff0be3f918dc2ce0"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:4a2361aaf46fabfc9b56",
+   "kind": "Topic",
+   "label": "basics-ipynb",
+   "title": "basics-ipynb",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:4a2361aaf46fabfc9b56"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:4b1cadd18b6ea3b24982",
+   "kind": "Topic",
+   "label": "cli-md",
+   "title": "cli-md",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:4b1cadd18b6ea3b24982"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:5197a9ad6793f7908d9a",
+   "kind": "Topic",
+   "label": "example-json",
+   "title": "example-json",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:5197a9ad6793f7908d9a"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:52c5303e6d3e1fc5a6bc",
+   "kind": "Topic",
+   "label": "arxiv-py",
+   "title": "arxiv-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:52c5303e6d3e1fc5a6bc"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:52fa5166256b2ded5173",
+   "kind": "Topic",
+   "label": "architecture-dot",
+   "title": "architecture-dot",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:52fa5166256b2ded5173"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:5330104532a7e17471fd",
+   "kind": "Topic",
+   "label": "quickstart-md",
+   "title": "quickstart-md",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:5330104532a7e17471fd"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:53cd75c413db58e401a1",
+   "kind": "Topic",
+   "label": "tf-gnns-commons-tensorflow",
+   "title": "tf-gnns-commons-tensorflow",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:53cd75c413db58e401a1"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:54bc0f5fd8ea07fc06dd",
+   "kind": "Topic",
+   "label": "index-py",
+   "title": "index-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:54bc0f5fd8ea07fc06dd"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:56ec9361389d33a60d0d",
+   "kind": "Topic",
+   "label": "pyproject-toml",
+   "title": "pyproject-toml",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:56ec9361389d33a60d0d"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:57c493718b95c36b1011",
+   "kind": "Topic",
+   "label": "utils-py",
+   "title": "utils-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:57c493718b95c36b1011"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:5a35de4efa52d8ebf47a",
+   "kind": "Topic",
+   "label": "backend-py",
+   "title": "backend-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:5a35de4efa52d8ebf47a"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:5d31e40843c550a54a24",
+   "kind": "Topic",
+   "label": "init-py",
+   "title": "init-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:5d31e40843c550a54a24"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:5e8e31afdfdf15279af0",
+   "kind": "Topic",
+   "label": "install-dgl",
+   "title": "install-dgl",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:5e8e31afdfdf15279af0"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:63f6bbf4f0bd318d3ac3",
+   "kind": "Topic",
+   "label": "data-py",
+   "title": "data-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:63f6bbf4f0bd318d3ac3"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:67204c4a3cf92419bcbc",
+   "kind": "Topic",
+   "label": "ogbg-molhiv-benchmark",
+   "title": "ogbg-molhiv-benchmark",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:67204c4a3cf92419bcbc"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:7b18f6b7ff0da630d373",
+   "kind": "Topic",
+   "label": "common-py",
+   "title": "common-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:7b18f6b7ff0da630d373"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:7cc3a3c4561fdb13017e",
+   "kind": "Topic",
+   "label": "tf-gnns-hackable",
+   "title": "tf-gnns-hackable",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:7cc3a3c4561fdb13017e"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:811fe7ae972c801a5726",
+   "kind": "Topic",
+   "label": "roundtrip-yaml",
+   "title": "roundtrip-yaml",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:811fe7ae972c801a5726"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:961c2fb2ae957efd7517",
+   "kind": "Topic",
+   "label": "db-py",
+   "title": "db-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:961c2fb2ae957efd7517"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:9dfdb9ade74bd10be689",
+   "kind": "Topic",
+   "label": "requirements-txt",
+   "title": "requirements-txt",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:9dfdb9ade74bd10be689"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:a10318c540480922736e",
+   "kind": "Topic",
+   "label": "tf-gnns-models-gcn",
+   "title": "tf-gnns-models-gcn",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:a10318c540480922736e"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:a1a598ccdadde8edd010",
+   "kind": "Topic",
+   "label": "dockerfile",
+   "title": "dockerfile",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:a1a598ccdadde8edd010"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:a632265f2450809be6a9",
+   "kind": "Topic",
+   "label": "license",
+   "title": "license",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:a632265f2450809be6a9"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:a6ab4c383cf4724a5180",
+   "kind": "Topic",
+   "label": "conf-py",
+   "title": "conf-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:a6ab4c383cf4724a5180"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:aa44dee6441490395194",
+   "kind": "Topic",
+   "label": "source-md",
+   "title": "source-md",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:aa44dee6441490395194"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:b0a7b349db4ed0a881a3",
+   "kind": "Topic",
+   "label": "tf-gpu",
+   "title": "tf-gpu",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:b0a7b349db4ed0a881a3"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:b2872bd9e67a30536bb7",
+   "kind": "Topic",
+   "label": "tf-gnns",
+   "title": "tf-gnns",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:b2872bd9e67a30536bb7"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:b3674de54522f0ed7c26",
+   "kind": "Topic",
+   "label": "docs-notebooks",
+   "title": "docs-notebooks",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:b3674de54522f0ed7c26"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:b41bfeae23416ea81615",
+   "kind": "Topic",
+   "label": "name-tf-gnns",
+   "title": "name-tf-gnns",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:b41bfeae23416ea81615"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:b9354a01998bc6a4b97f",
+   "kind": "Topic",
+   "label": "backends-md",
+   "title": "backends-md",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:b9354a01998bc6a4b97f"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:b97e931d426d48a17cd2",
+   "kind": "Topic",
+   "label": "skill-md",
+   "title": "skill-md",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:b97e931d426d48a17cd2"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:baba3e21a7babb11a551",
+   "kind": "Topic",
+   "label": "diagnostics-py",
+   "title": "diagnostics-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:baba3e21a7babb11a551"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:c1f0508609f307162afe",
+   "kind": "Topic",
+   "label": "path-py",
+   "title": "path-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:c1f0508609f307162afe"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:c3baf3dbcb6e07b16342",
+   "kind": "Topic",
+   "label": "example-png",
+   "title": "example-png",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:c3baf3dbcb6e07b16342"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:c4cce783db98a80cf354",
+   "kind": "Topic",
+   "label": "coverage-sh",
+   "title": "coverage-sh",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:c4cce783db98a80cf354"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:c7f7968abdbd629e1f7f",
+   "kind": "Topic",
+   "label": "ops-py",
+   "title": "ops-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:c7f7968abdbd629e1f7f"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:cd1eebc56c79bcbaf6a3",
+   "kind": "Topic",
+   "label": "docs-py",
+   "title": "docs-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:cd1eebc56c79bcbaf6a3"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:cee75e9910786d6ad9fd",
+   "kind": "Topic",
+   "label": "tf-gnns-lib-gt-ops",
+   "title": "tf-gnns-lib-gt-ops",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:cee75e9910786d6ad9fd"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:d73d60fb19a815f287ff",
+   "kind": "Topic",
+   "label": "tfgnns-ipynb",
+   "title": "tfgnns-ipynb",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:d73d60fb19a815f287ff"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:e2e8a91fd880a71935cd",
+   "kind": "Topic",
+   "label": "suite-md",
+   "title": "suite-md",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:e2e8a91fd880a71935cd"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:f0edca2e8a307bf92171",
+   "kind": "Topic",
+   "label": "results-py",
+   "title": "results-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:f0edca2e8a307bf92171"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:f2628981fe15da3c49bf",
+   "kind": "Topic",
+   "label": "pages-yml",
+   "title": "pages-yml",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:f2628981fe15da3c49bf"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:f45f69da42b20d54f362",
+   "kind": "Topic",
+   "label": "datastructures-rst",
+   "title": "datastructures-rst",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:f45f69da42b20d54f362"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:f69761471dc3412b73ce",
+   "kind": "Topic",
+   "label": "release-md",
+   "title": "release-md",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:f69761471dc3412b73ce"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:f7233b950725741a4055",
+   "kind": "Topic",
+   "label": "graphnet-py",
+   "title": "graphnet-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:f7233b950725741a4055"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "topic:fc27bf1f5dcd321d894d",
+   "kind": "Topic",
+   "label": "frameworks-py",
+   "title": "frameworks-py",
+   "time": "2026-09-14T21:15:58+00:00",
+   "props": {
+    "topic_id": "topic:fc27bf1f5dcd321d894d"
+   },
+   "prov": {
+    "method": "deterministic-tfidf-labeler",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 1.0
+  },
+  {
+   "id": "workitem:11361ca198dfd8a6edada6ba",
+   "kind": "WorkItem",
+   "label": "#12 updated uv locl",
+   "title": "updated uv locl",
+   "time": "2026-09-14T20:51:01+00:00",
+   "props": {
+    "number": 12,
+    "kind": "pull_request",
+    "state": "closed",
+    "url": "https://github.com/mylonasc/tf_gnns/pull/12"
+   },
+   "prov": {
+    "method": "github-discovery",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9998062434896777
+  },
+  {
+   "id": "workitem:ee20175f246b45fecb56232a",
+   "kind": "WorkItem",
+   "label": "#11 updated version",
+   "title": "updated version",
+   "time": "2026-09-14T20:46:27+00:00",
+   "props": {
+    "number": 11,
+    "kind": "pull_request",
+    "state": "closed",
+    "url": "https://github.com/mylonasc/tf_gnns/pull/11"
+   },
+   "prov": {
+    "method": "github-discovery",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9997707797062253
+  },
+  {
+   "id": "workitem:fc38600f31760d05c6f20da1",
+   "kind": "WorkItem",
+   "label": "#10 Agentic doc metaskill",
+   "title": "Agentic doc metaskill",
+   "time": "2026-09-14T20:15:31+00:00",
+   "props": {
+    "number": 10,
+    "kind": "pull_request",
+    "state": "closed",
+    "url": "https://github.com/mylonasc/tf_gnns/pull/10"
+   },
+   "prov": {
+    "method": "github-discovery",
+    "run_id": "viewer-live",
+    "horizon": "2026-11-25T18:17:30.034409+00:00"
+   },
+   "t": 0.9995305578737883
+  }
+ ],
+ "edges": [
+  {
+   "source": "commit:158b5bb8a528ecdcf9df21c2",
+   "target": "workitem:11361ca198dfd8a6edada6ba",
+   "relation": "MENTIONS",
+   "inferred": false,
+   "rationale": "Text references work item #12.",
+   "evidence": 1
+  },
+  {
+   "source": "commit:7c451c4fb61d880d2eb5ac19",
+   "target": "workitem:fc38600f31760d05c6f20da1",
+   "relation": "MENTIONS",
+   "inferred": false,
+   "rationale": "Text references work item #10.",
+   "evidence": 1
+  },
+  {
+   "source": "commit:f1418e795d48cd60f01206ed",
+   "target": "workitem:ee20175f246b45fecb56232a",
+   "relation": "MENTIONS",
+   "inferred": false,
+   "rationale": "Text references work item #11.",
+   "evidence": 1
+  },
+  {
+   "source": "workitem:11361ca198dfd8a6edada6ba",
+   "target": "branch:55c2c8b15d18a4e6c738a15a",
+   "relation": "RELATED_TO",
+   "inferred": false,
+   "rationale": "PR #12 targets head branch 'version_bump' (branch is deleted; tip not resolved).",
+   "evidence": 1
+  },
+  {
+   "source": "workitem:11361ca198dfd8a6edada6ba",
+   "target": "branch:95e9091d20e4af779c24a9f4",
+   "relation": "RELATED_TO",
+   "inferred": false,
+   "rationale": "PR #12 targets base branch 'main'.",
+   "evidence": 1
+  },
+  {
+   "source": "workitem:11361ca198dfd8a6edada6ba",
+   "target": "commit:158b5bb8a528ecdcf9df21c2",
+   "relation": "CLOSED_BY",
+   "inferred": false,
+   "rationale": "PR #12 merged at 2026-09-14 20:51:10+00:00; merge style is non-head over 1 PR commit(s).",
+   "evidence": 1
+  },
+  {
+   "source": "workitem:ee20175f246b45fecb56232a",
+   "target": "branch:55c2c8b15d18a4e6c738a15a",
+   "relation": "RELATED_TO",
+   "inferred": false,
+   "rationale": "PR #11 targets head branch 'version_bump' (branch is deleted; tip not resolved).",
+   "evidence": 1
+  },
+  {
+   "source": "workitem:ee20175f246b45fecb56232a",
+   "target": "branch:95e9091d20e4af779c24a9f4",
+   "relation": "RELATED_TO",
+   "inferred": false,
+   "rationale": "PR #11 targets base branch 'main'.",
+   "evidence": 1
+  },
+  {
+   "source": "workitem:ee20175f246b45fecb56232a",
+   "target": "commit:f1418e795d48cd60f01206ed",
+   "relation": "CLOSED_BY",
+   "inferred": false,
+   "rationale": "PR #11 merged at 2026-09-14 20:46:37+00:00; merge style is non-head over 1 PR commit(s).",
+   "evidence": 1
+  },
+  {
+   "source": "workitem:ee20175f246b45fecb56232a",
+   "target": "file:6bb50dae1276d77db5a34be1",
+   "relation": "RELATED_TO",
+   "inferred": true,
+   "rationale": "Shared derived topics ['python-version'] (overlap 1/1).",
+   "evidence": 0
+  },
+  {
+   "source": "workitem:fc38600f31760d05c6f20da1",
+   "target": "branch:780cd5981252bf84ebaecfb4",
+   "relation": "RELATED_TO",
+   "inferred": false,
+   "rationale": "PR #10 targets head branch 'agentic-doc-metaskill'.",
+   "evidence": 1
+  },
+  {
+   "source": "workitem:fc38600f31760d05c6f20da1",
+   "target": "branch:95e9091d20e4af779c24a9f4",
+   "relation": "RELATED_TO",
+   "inferred": false,
+   "rationale": "PR #10 targets base branch 'main'.",
+   "evidence": 1
+  },
+  {
+   "source": "workitem:fc38600f31760d05c6f20da1",
+   "target": "commit:7c451c4fb61d880d2eb5ac19",
+   "relation": "CLOSED_BY",
+   "inferred": false,
+   "rationale": "PR #10 merged at 2026-09-14 20:34:20+00:00; merge style is non-head over 10 PR commit(s).",
+   "evidence": 1
+  }
+ ],
+ "meta": {
+  "title": "Repository slice",
+  "run_id": "viewer-live",
+  "horizon": "2026-11-25T18:17:30.034409+00:00",
+  "window": {
+   "start": "2026-09-13T00:00:00+00:00",
+   "end": "2026-09-15T00:00:00+00:00"
+  },
+  "counts": {
+   "links": 13,
+   "omitted": 0,
+   "Branch": 9,
+   "Commit": 18,
+   "File": 1,
+   "Topic": 62,
+   "WorkItem": 3
+  },
+  "max_nodes": 120
+ }
+}

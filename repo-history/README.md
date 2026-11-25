@@ -330,3 +330,26 @@ is deterministic SVG (stdlib only): factual links are solid blue, inferred
 topical links are dashed amber, nodes are capped at a fixed budget with
 omissions reported, and the footer records run, horizon, counts, and gaps.
 `viz.render_slice_svg()` renders any bounded slice the same way.
+
+## Interactive D3 time-biased graph viewer
+
+`examples/build_viewer.py` exports the live slice to `examples/graph.json`
+and writes `examples/viewer.html`, a self-contained page (D3 loaded from
+CDN, with an offline data-table fallback) with a force-directed layout whose
+x-axis is time:
+
+- every timestamped node is normalized to `t` in `[0, 1]` across the graph;
+  an anchor force pulls every node toward the mid-time center while a second
+  force pulls left/right with strength growing with `|t - 0.5|`, so the plot
+  elongates along time as nodes appear.
+- nodes without timestamps (deleted branches, unobserved tips) stay centered
+  with no time pull; snapshot occurrences aggregate to file nodes and remote
+  tracking refs resolve to PR head branches.
+- interactions: drag, zoom/pan, hover tooltips, click-to-focus neighborhoods
+  with provenance and evidence, kind/edge-type filters, label and time-color
+  toggles, a time-window dimmer, text search, pause/reset, and sliders for
+  anchor pull, time spread, link distance, and repulsion.
+
+`viz_d3.build_viewer_data()` bounds the graph (`max_nodes`, core entities
+always kept, omissions reported) and `viz_d3.render_viewer_html()` embeds
+the payload deterministically.

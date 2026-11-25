@@ -10,6 +10,7 @@ from typing import Any
 
 from .models import (
     Budgets,
+    ContentSettings,
     GitSettings,
     LLMSettings,
     RepositorySpec,
@@ -36,6 +37,7 @@ def load_config(path: str | Path | None = None) -> RuntimeConfig:
         repository=repository,
         budgets=Budgets(**raw.get("budgets", {})),
         git=GitSettings(**raw.get("git", {})),
+        content=ContentSettings(**raw.get("content", {})),
         llm=LLMSettings(**raw.get("llm", {})),
         data_root=raw.get("runtime", {}).get("data_root", "data"),
         cache_dir=raw.get("runtime", {}).get("cache_dir", "data/cache"),

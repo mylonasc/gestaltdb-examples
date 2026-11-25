@@ -9,6 +9,7 @@ from .config import RuntimeConfig, load_config
 from .events import EventKind, IngestEvent
 from .models import (
     Budgets,
+    ContentSettings,
     CoverageGap,
     CoverageStatus,
     GitSettings,
@@ -18,6 +19,7 @@ from .models import (
 
 __all__ = [
     "Budgets",
+    "ContentSettings",
     "CoverageGap",
     "CoverageStatus",
     "EventKind",

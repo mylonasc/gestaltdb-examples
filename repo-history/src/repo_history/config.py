@@ -8,7 +8,14 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from .models import Budgets, LLMSettings, RepositorySpec, RuntimeConfig, TimeWindow
+from .models import (
+    Budgets,
+    GitSettings,
+    LLMSettings,
+    RepositorySpec,
+    RuntimeConfig,
+    TimeWindow,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "tf_gnns.toml"
@@ -28,6 +35,7 @@ def load_config(path: str | Path | None = None) -> RuntimeConfig:
     runtime = RuntimeConfig(
         repository=repository,
         budgets=Budgets(**raw.get("budgets", {})),
+        git=GitSettings(**raw.get("git", {})),
         llm=LLMSettings(**raw.get("llm", {})),
         data_root=raw.get("runtime", {}).get("data_root", "data"),
         cache_dir=raw.get("runtime", {}).get("cache_dir", "data/cache"),

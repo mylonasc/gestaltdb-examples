@@ -281,3 +281,31 @@ Weak topical overlap abstains with its score instead of linking.
 `link_edge_writes()` maps accepted links to single-writer relationship
 writes. `score_links()` measures precision/recall over annotated fixtures.
 `LinkingSettings` (`[linking]` section) sets the inference score floor.
+
+## Inspection queries and visualization
+
+`Inspector` answers the six user-visible questions from adapter outputs —
+no database, no network — with horizon and coverage attached to every
+answer: commit-range changes, work-item traces with evidence, branch
+containment, topic timelines (emergence then recurrence), files and sections
+for a work item at a chosen time, and attribution for labels and links:
+
+```python
+from repo_history.inspection import Inspector
+
+inspector = Inspector(
+    index=index, discovery=discovery, content=content, links=links,
+    assignments=assignments, info_horizon=horizon, run_id=run_id,
+    repository_url=repo_url,
+)
+changes = inspector.changes_in_range(from_sha, to_sha)
+traces = inspector.work_items_for_commits([sha, ...])
+timeline = inspector.topic_timeline(topic_id)
+```
+
+`examples/runbook.py` executes the whole pipeline end to end on the live
+slice and saves `examples/report.md` plus `examples/slice.svg`. The figure
+is deterministic SVG (stdlib only): factual links are solid blue, inferred
+topical links are dashed amber, nodes are capped at a fixed budget with
+omissions reported, and the footer records run, horizon, counts, and gaps.
+`viz.render_slice_svg()` renders any bounded slice the same way.

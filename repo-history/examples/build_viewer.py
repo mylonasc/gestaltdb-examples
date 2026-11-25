@@ -229,8 +229,10 @@ def main() -> None:
             for pull in discovery.pull_requests if pull.base_ref
         },
         extra_edges=[
+            # TOUCHES is synthesized in build_viewer_data from index snapshots
+            # (aggregated commit->file edges; per-commit diffs live in the index).
             *(r for r in map_git_index(index, ids, run_id=RUN_ID).relationships
-              if r.edge_type in (PARENT_COMMIT, TIP_OF, TOUCHES)),
+              if r.edge_type in (PARENT_COMMIT, TIP_OF)),
             *(r for r in map_discovery(discovery, ids, run_id=RUN_ID).relationships
               if r.edge_type == CHILD_OF),
             *map_imports(content, index, ids, run_id=RUN_ID).relationships,

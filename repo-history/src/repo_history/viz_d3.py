@@ -23,6 +23,7 @@ from .graph import HIERARCHICAL_EDGE_TYPES, EntityWrite, RelationshipWrite
 from .ids import IdFactory
 from .labeling import TopicAssignment
 from .linking import LinkRecord, LinkRelation
+from .models import ensure_utc
 
 __all__ = [
     "D3_CDN_URL",
@@ -332,15 +333,19 @@ def build_viewer_data(
             prov={"method": write.origin, "run_id": run_id,
                   "horizon": info_horizon.isoformat()},
         )
-    known = sorted(times.values())
-    if len(known) >= 2 and known[0] != known[-1]:
-        span = (known[-1] - known[0]).total_seconds()
-        normalized = {
-            nid: (moment - known[0]).total_seconds() / span
-            for nid, moment in times.items()
-        }
-    else:
+    # Anchor the time axis to the demo window, not to outliers: timestamps
+    # outside [start, end] clamp to the edges so boundary commits cannot
+    # squeeze the whole slice into one end.  A single shared timestamp maps
+    # to mid-time instead of an arbitrary edge.
+    window = index.selection.window
+    span = (ensure_utc(window.end) - ensure_utc(window.start)).total_seconds()
+    if len(set(times.values())) < 2 or span <= 0:
         normalized = {nid: 0.5 for nid in times}
+    else:
+        normalized = {}
+        for nid, moment in times.items():
+            value = (ensure_utc(moment) - ensure_utc(window.start)).total_seconds() / span
+            normalized[nid] = max(0.0, min(1.0, value))
     for node_id, node in nodes.items():
         node["t"] = normalized.get(node_id)
 
@@ -399,7 +404,6 @@ def build_viewer_data(
     counts = {"links": len(edges), "omitted": omitted}
     for node in kept_nodes:
         counts[node["kind"]] = counts.get(node["kind"], 0) + 1
-    window = index.selection.window
     return {
         "nodes": kept_nodes,
         "edges": sorted(edges, key=lambda e: (e["source"], e["target"], e["relation"])),
@@ -414,7 +418,9 @@ def build_viewer_data(
             "notes": (
                 "Snapshot occurrences aggregate to file nodes; "
                 "MEMBER_OF/OF_FILE snapshot granularity is folded into TOUCHES. "
-                "Folder nodes group files by directory; the repository node roots branches."
+                "Folder nodes group files by directory; the repository node roots branches. "
+                "Node time t is anchored to the demo window (out-of-window evidence clamps "
+                "to the edges)."
             ),
         },
     }
@@ -585,14 +591,15 @@ const DATA = __DATA__;
     sim.alpha(0.5).restart();
   }
 
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const idOf = x => (x && x.id) || x;
+
   function select(d) {
     if (!d) {
       node.style('opacity', 1); link.style('opacity', 1);
       document.getElementById('details').textContent = 'Click a node to inspect its relations.';
       return;
     }
-    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const idOf = x => (x && x.id) || x;
     const near = new Set([d.id]);
     DATA.edges.forEach(e => {
       if (idOf(e.source) === d.id) near.add(idOf(e.target));

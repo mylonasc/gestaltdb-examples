@@ -364,7 +364,7 @@ omissions reported, and the footer records run, horizon, counts, and gaps.
 and writes `examples/viewer.html`, a self-contained page (D3 loaded from
 CDN, with an offline data-table fallback) with a force-directed layout whose
 x-axis is time and whose y-axis follows the entity hierarchy
-(Repository → Branch → WorkItem → Commit → Topic → Folder → File, with Class nodes grouped at file level). All edge
+(Repository → Branch → WorkItem → Commit → Topic → Folder → File → Class). All edge
 kinds are included — `PARENT_COMMIT`, `TIP_OF`, `TOUCHES` (commit→diff),
 `CHANGES` (diff→file), `DEFINED_AT` (class→file), `IMPORTS` (intra-repo
 Python imports), `CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`,

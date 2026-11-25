@@ -6,6 +6,8 @@ import json
 import re
 from datetime import datetime, timezone
 
+import pytest
+
 from repo_history.analysis import AnalysisResult, DecisionStatus, Provenance
 from repo_history.content import ContentIndex, SnapshotContent
 from repo_history.git import BranchObservation, CommitRecord, GitIndex, GitSelection
@@ -163,17 +165,27 @@ def fixture_inputs(**overrides):
     return arguments
 
 
-def test_times_normalize_min_to_max():
+def test_times_normalize_to_the_demo_window_and_clamp_outliers():
     data = build_viewer_data(**fixture_inputs())
     by_id = {node["id"]: node for node in data["nodes"]}
 
-    assert by_id[ids().commit(ROOT)]["t"] == 0.0
-    assert by_id[ids().commit(TIP)]["t"] == 1.0
-    assert by_id[ids().commit(MID)]["t"] == 0.5
-    assert 0.0 <= by_id[ids().work_item("github", 10)]["t"] <= 1.0
+    # WINDOW spans 2026-09-13T00:00Z..2026-09-15T00:00Z (48h).
+    assert by_id[ids().commit(ROOT)]["t"] == 33 / 48
+    assert by_id[ids().commit(MID)]["t"] == 34 / 48
+    assert by_id[ids().commit(TIP)]["t"] == 35 / 48
+    assert all(0.0 <= node["t"] <= 1.0 for node in data["nodes"] if node["t"] is not None)
+
+    # Out-of-window timestamps clamp to the edges instead of squeezing the slice.
+    early = build_viewer_data(
+        **fixture_inputs(assignments=[assignment("s", ids().topic("early"), "Early")])
+    )
+    assert all(
+        0.0 <= node["t"] <= 1.0 for node in early["nodes"] if node["t"] is not None
+    )
+    assert by_id[ids().work_item("github", 10)]["t"] == 34 / 48
     # The file and topic inherit source times, inside the range.
-    assert by_id[ids().file("docs/guide.md")]["t"] == 1.0
-    assert by_id[ids().topic("sparse")]["t"] == 1.0
+    assert by_id[ids().file("docs/guide.md")]["t"] == 35 / 48
+    assert by_id[ids().topic("sparse")]["t"] == 35 / 48
 
 
 def test_timeless_nodes_center_without_pull():
@@ -339,7 +351,7 @@ def test_extra_structural_nodes_join_with_folder_times():
     )
     by_id = {node["id"]: node for node in data["nodes"]}
     assert by_id[stable_folder_id("docs")]["kind"] == "Folder"
-    assert by_id[stable_folder_id("docs")]["t"] == 1.0
+    assert by_id[stable_folder_id("docs")]["t"] == pytest.approx(35 / 48)
     assert by_id[ids().repository_id]["kind"] == "Repository"
     assert by_id[ids().repository_id]["t"] is None
 
@@ -527,7 +539,7 @@ def test_extra_structural_nodes_join_with_hierarchy_times():
     by_id = {node["id"]: node for node in data["nodes"]}
 
     assert by_id["folder:docs"]["kind"] == "Folder"
-    assert by_id["folder:docs"]["t"] == 1.0
+    assert by_id["folder:docs"]["t"] == pytest.approx(35 / 48)
     assert by_id["repo:x"]["t"] is None
     assert "Repository" in {node["kind"] for node in data["nodes"]}
 

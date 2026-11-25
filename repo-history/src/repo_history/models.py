@@ -157,6 +157,23 @@ class GraphSettings(FrozenModel):
         return {}
 
 
+class LabelingSettings(FrozenModel):
+    """Thresholds and retrieval limits for deterministic topic labeling."""
+
+    reuse_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    alias_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    min_score: float = Field(default=0.1, ge=0.0, le=1.0)
+    top_k: int = Field(default=5, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def validate_thresholds(self) -> Self:
+        if self.alias_threshold > self.reuse_threshold:
+            raise ValueError("alias_threshold must not exceed reuse_threshold")
+        if self.min_score > self.alias_threshold:
+            raise ValueError("min_score must not exceed alias_threshold")
+        return self
+
+
 class GitHubSettings(FrozenModel):
     """Bounded GitHub REST discovery and evidence-cache limits."""
 
@@ -204,6 +221,7 @@ class RuntimeConfig(FrozenModel):
     github: GitHubSettings = Field(default_factory=GitHubSettings)
     orchestration: OrchestrationSettings = Field(default_factory=OrchestrationSettings)
     graph: GraphSettings = Field(default_factory=GraphSettings)
+    labeling: LabelingSettings = Field(default_factory=LabelingSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     data_root: str = "data"
     cache_dir: str = "data/cache"

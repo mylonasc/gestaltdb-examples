@@ -157,3 +157,36 @@ replaying the journal into a fresh database. Bulk loads use `defer_indexes`;
 every read path rebuilds stale indexes first, since the driver refuses
 temporal and indexed queries while they are stale. `GraphSettings` (`[graph]`
 section) sets the path, backend, overwrite flag, and LMDB map size.
+
+## Topic registry and deterministic labeling
+
+`DeterministicLabeler` assigns topics without a model: deterministic
+path/language/heading/reference features describe each subject, a classical
+TF-IDF baseline retrieves candidate topics by cosine similarity, and the
+outcome is reuse, a genuinely new proposal, an alias suggestion, or an
+explicit abstention — each with matched terms as the rationale:
+
+```python
+from repo_history.labeling import (
+    DeterministicLabeler,
+    extract_snapshot_features,
+    seed_registry,
+)
+
+labeler = DeterministicLabeler(config.labeling)
+registry = seed_registry(at=now)
+assignment = labeler.assign(
+    features, registry, subject_id=subject_id,
+    run_id=run_id, info_horizon=horizon,
+)
+```
+
+Provider labels are preserved verbatim by `preserve_provider_labels` in a
+separate assignment namespace; derived topics never absorb them silently.
+Assignments are `AnalysisResult` envelopes, so each decision key already binds
+subject, method, horizon, and evidence. Growing the registry (registrations,
+aliases, merges) never rewrites old assignments: they reference the registry
+version they were decided against, merges mark old topics as superseded
+instead of deleting them, and re-running against a kept registry snapshot
+reproduces the original decisions exactly. `LabelingSettings` (`[labeling]`
+section) sets the reuse/alias thresholds, minimum score, and retrieval limit.

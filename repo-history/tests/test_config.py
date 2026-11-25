@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from repo_history.config import DEFAULT_CONFIG, config_fingerprint, load_config
-from repo_history.models import ContentSettings, GitSettings, RuntimeConfig
+from repo_history.models import ContentSettings, GitHubSettings, GitSettings, RuntimeConfig
 
 
 def test_sample_config_expresses_the_pinned_slice():
@@ -67,6 +67,31 @@ def test_content_settings_reject_invalid_limits():
         ContentSettings(max_symbols=10_001)
     with pytest.raises(ValidationError):
         ContentSettings(max_imports=0)
+
+
+def test_github_settings_are_loaded_from_toml():
+    config = load_config()
+    assert config.github.api_url == "https://api.github.com"
+    assert config.github.token_env == "GITHUB_TOKEN"
+    assert config.github.per_page == 50
+    assert config.github.max_pages == 20
+    assert config.github.max_retries == 2
+    assert config.github.max_response_bytes == 2097152
+    assert config.github.required_scopes == ()
+    assert "repo-history" in config.github.user_agent
+
+
+def test_github_settings_reject_invalid_limits():
+    with pytest.raises(ValidationError):
+        GitHubSettings(per_page=101)
+    with pytest.raises(ValidationError):
+        GitHubSettings(max_pages=0)
+    with pytest.raises(ValidationError):
+        GitHubSettings(max_retries=6)
+    with pytest.raises(ValidationError):
+        GitHubSettings(api_url="api.github.com")
+    with pytest.raises(ValidationError):
+        GitHubSettings(token_env="  ")
 
 
 def test_fingerprint_is_stable_and_sensitive(tmp_path):

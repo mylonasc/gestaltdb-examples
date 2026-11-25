@@ -12,6 +12,7 @@ from repo_history.models import (
     ContentSettings,
     CoverageGap,
     CoverageStatus,
+    GitHubSettings,
     LLMSettings,
     RepositorySpec,
     RuntimeConfig,
@@ -108,6 +109,23 @@ def test_content_settings_defaults_are_bounded():
         ContentSettings(max_file_bytes=0)
     with pytest.raises(ValidationError):
         ContentSettings(max_sections=10_001)
+
+
+def test_github_settings_defaults_are_bounded_and_secret_free():
+    settings = GitHubSettings()
+    assert settings.api_url == "https://api.github.com"
+    assert settings.token_env == "GITHUB_TOKEN"
+    assert settings.per_page == 50
+    assert settings.max_pages == 20
+    assert settings.max_retries == 2
+    assert settings.required_scopes == ()
+    assert "token" not in settings.model_dump()
+    with pytest.raises(ValidationError):
+        GitHubSettings(per_page=0)
+    with pytest.raises(ValidationError):
+        GitHubSettings(max_pages=101)
+    with pytest.raises(ValidationError):
+        GitHubSettings(timeout_seconds=0)
 
 
 def test_coverage_gap_is_immutable_and_typed():

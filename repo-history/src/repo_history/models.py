@@ -113,6 +113,20 @@ class ContentSettings(FrozenModel):
     max_imports: int = Field(default=500, ge=1, le=10_000)
 
 
+class OrchestrationSettings(FrozenModel):
+    """Durable journal and checkpoint locations for resumable replay."""
+
+    journal_file: str = "data/journal/events.jsonl"
+    checkpoint_file: str = "data/journal/checkpoint.json"
+
+    @field_validator("journal_file", "checkpoint_file")
+    @classmethod
+    def validate_relative_path(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("journal and checkpoint paths must not be blank")
+        return value.strip()
+
+
 class GitHubSettings(FrozenModel):
     """Bounded GitHub REST discovery and evidence-cache limits."""
 
@@ -158,6 +172,7 @@ class RuntimeConfig(FrozenModel):
     git: GitSettings = Field(default_factory=GitSettings)
     content: ContentSettings = Field(default_factory=ContentSettings)
     github: GitHubSettings = Field(default_factory=GitHubSettings)
+    orchestration: OrchestrationSettings = Field(default_factory=OrchestrationSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     data_root: str = "data"
     cache_dir: str = "data/cache"

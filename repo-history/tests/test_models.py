@@ -14,6 +14,7 @@ from repo_history.models import (
     CoverageStatus,
     GitHubSettings,
     LLMSettings,
+    OrchestrationSettings,
     RepositorySpec,
     RuntimeConfig,
     TimeWindow,
@@ -126,6 +127,12 @@ def test_github_settings_defaults_are_bounded_and_secret_free():
         GitHubSettings(max_pages=101)
     with pytest.raises(ValidationError):
         GitHubSettings(timeout_seconds=0)
+
+
+def test_orchestration_settings_default_to_the_journal_directory():
+    settings = OrchestrationSettings()
+    assert settings.journal_file == "data/journal/events.jsonl"
+    assert settings.checkpoint_file == "data/journal/checkpoint.json"
 
 
 def test_coverage_gap_is_immutable_and_typed():

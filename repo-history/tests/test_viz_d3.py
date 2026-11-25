@@ -117,7 +117,9 @@ def assignment(subject_id: str, topic_id: str, name: str) -> TopicAssignment:
     )
 
 
-def link(source: str, target: str, relation: LinkRelation, method: str = "link-resolver") -> LinkRecord:
+def link(
+    source: str, target: str, relation: LinkRelation, method: str = "link-resolver"
+) -> LinkRecord:
     return LinkRecord(
         link_id=f"link:{source}:{relation.value}:{target}",
         source_id=source, target_id=target, relation=relation,

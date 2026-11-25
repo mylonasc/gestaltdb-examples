@@ -121,7 +121,9 @@ def build_viewer_data(
     for assignment in assignments:
         if assignment.kind != "derived" or assignment.topic_id is None:
             continue
-        topic_names.setdefault(assignment.topic_id, assignment.topic_name or assignment.topic_id)
+        topic_names.setdefault(
+            assignment.topic_id, assignment.topic_name or assignment.topic_id
+        )
         moment = subject_time.get(assignment.subject_id)
         topic_moments.setdefault(assignment.topic_id, []).append(
             moment if moment is not None else assignment.result.provenance.info_horizon
@@ -200,14 +202,20 @@ def build_viewer_data(
             add(
                 link.target_id, "Branch", f"{ref} ⚠", title=f"{ref} (unobserved tip)",
                 time=None,
-                props={"name": ref, "source": "unobserved", "status": "deleted or outside slice"},
+                props={
+                    "name": ref, "source": "unobserved",
+                    "status": "deleted or outside slice",
+                },
                 prov={"method": "link-provider", "run_id": run_id,
                       "horizon": info_horizon.isoformat()},
             )
     known = sorted(times.values())
     if len(known) >= 2 and known[0] != known[-1]:
         span = (known[-1] - known[0]).total_seconds()
-        normalized = {nid: (moment - known[0]).total_seconds() / span for nid, moment in times.items()}
+        normalized = {
+            nid: (moment - known[0]).total_seconds() / span
+            for nid, moment in times.items()
+        }
     else:
         normalized = {nid: 0.5 for nid in times}
     for node_id, node in nodes.items():

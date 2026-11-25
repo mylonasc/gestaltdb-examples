@@ -24,12 +24,20 @@ from repo_history.content import (
 from repo_history.github import GitHubWorkItem, RevisionAvailability
 from repo_history.ids import IdFactory
 from repo_history.labeling import (
+    COMMIT_TYPE_KEYWORDS,
     ContentFeatures,
     DeterministicLabeler,
+    TopicAssignment,
     TopicRegistry,
+    assign_commit,
+    classify_commit,
     extract_snapshot_features,
     extract_work_item_features,
+    register_prevalent,
+    seed_commit_type_registry,
     seed_registry,
+    seed_structural_registry,
+    topic_membership,
 )
 from repo_history.models import LabelingSettings
 from repo_history.protocols import Labeler
@@ -554,3 +562,146 @@ def test_labeling_settings_have_thresholds_and_load_from_toml():
     config = load_config()
     assert config.labeling.reuse_threshold == 0.5
     assert config.labeling.top_k == 5
+
+
+def _registry_ids():
+    return IdFactory(REPOSITORY_URL)
+
+
+def test_seed_structural_registry_groups_top_level_directories():
+    registry = seed_structural_registry(
+        ["models/gcn.py", "models/graphnet.py", "docs/guide.md",
+         "README.md", "models/__init__.py"],
+        at=NOW, created_by="test", ids=_registry_ids(),
+    )
+
+    assert {topic.name for topic in registry.topics} == {"models"}
+    record = registry.lookup("models")
+    assert record is not None
+    assert "gcn.py" in record.description
+    assert registry.version == 1
+
+
+def test_seed_structural_registry_respects_min_files_and_existing():
+    registry = seed_structural_registry(
+        ["docs/a.md"], at=NOW, created_by="test", ids=_registry_ids()
+    )
+    assert registry.topics == ()
+
+    base = registry_with("models")
+    grown = seed_structural_registry(
+        ["models/a.py", "models/b.py"], at=NOW, created_by="test",
+        ids=_registry_ids(), base=base,
+    )
+    assert grown.version == 1  # existing topic reused, not duplicated
+
+
+def test_seed_commit_type_registry_has_all_commit_types():
+    registry = seed_commit_type_registry(at=NOW, created_by="test", ids=_registry_ids())
+
+    assert {topic.name for topic in registry.topics} == set(COMMIT_TYPE_KEYWORDS)
+    assert "fix" in registry.lookup("bug-fix").description
+
+
+def test_classify_commit_detects_types_and_abstains_without_signal():
+    fix = classify_commit("Fix crash in sparse path", ["models/gcn.py"])
+    assert fix.action == "reuse"
+    assert fix.topic_name == "bug-fix"
+    assert fix.confidence == 1.0
+    assert "crash" in fix.matched_terms
+
+    docs = classify_commit("Update guide", ["docs/guide.md"])
+    assert docs.topic_name == "documentation"
+
+    assert classify_commit("Merge pull request #10", []).action == "abstain"
+    assert classify_commit("", []).confidence == 0.0
+
+
+def test_register_prevalent_requires_shared_proposers():
+    registry = seed_registry(at=NOW)
+    registry, registered = register_prevalent(
+        registry,
+        {"models-gcn": ["models gcn torch", "models gcn torch"],
+          "lonely": ["unique snowflake text"]},
+        min_subjects=2, at=NOW, created_by="test", ids=_registry_ids(),
+    )
+
+    assert set(registered) == {"models-gcn"}
+    assert registry.lookup("lonely") is None
+    assert "torch" in registered["models-gcn"].description
+
+    # Re-proposing a registered name resolves to the existing record.
+    registry, again = register_prevalent(
+        registry, {"models-gcn": ["other text"]},
+        min_subjects=2, at=NOW, created_by="test", ids=_registry_ids(),
+    )
+    assert again["models-gcn"].topic_id == registered["models-gcn"].topic_id
+
+
+def test_assign_commit_maps_message_and_paths_to_topics():
+    registry = seed_commit_type_registry(at=NOW, created_by="test", ids=_registry_ids())
+    assignment = assign_commit(
+        "Fix crash in sparse path", ["models/gcn.py"], registry,
+        subject_id="commit:abc", run_id="run-1", info_horizon=HORIZON_ONE,
+        ids=_registry_ids(),
+    )
+
+    assert assignment.action == "reuse"
+    assert assignment.topic_id == registry.lookup("bug-fix").topic_id
+    assert assignment.result.kind == "topic"
+
+    abstained = assign_commit(
+        "Merge pull request #10", [], registry,
+        subject_id="commit:def", run_id="run-1", info_horizon=HORIZON_ONE,
+        ids=_registry_ids(),
+    )
+    assert abstained.action == "abstain"
+    assert abstained.result.status is DecisionStatus.ABSTAINED
+
+
+def _fixture_assignment(subject_id: str, topic_id: str, name: str) -> TopicAssignment:
+    from repo_history.analysis import AnalysisResult, Provenance
+
+    return TopicAssignment(
+        subject_id=subject_id,
+        kind="derived",
+        action="reuse",
+        topic_id=topic_id,
+        topic_name=name,
+        confidence=0.9,
+        rationale="fixture",
+        registry_version=1,
+        result=AnalysisResult.create(
+            subject_id=subject_id,
+            kind="topic",
+            status=DecisionStatus.ACCEPTED,
+            value={"action": "reuse", "topic_id": topic_id},
+            provenance=Provenance(
+                method="deterministic-tfidf-labeler",
+                method_version="1",
+                run_id="run-1",
+                info_horizon=NOW,
+            ),
+            evidence=(),
+        ),
+    )
+
+
+def test_topic_membership_groups_subjects_deterministically():
+    assignments = [
+        _fixture_assignment("s2", "topic:t", "T"),
+        _fixture_assignment("s1", "topic:t", "T"),
+        _fixture_assignment("s3", "topic:u", "U"),
+    ]
+    membership = topic_membership(assignments + [lonely_provider()])
+
+    assert membership == {"topic:t": ["s1", "s2"], "topic:u": ["s3"]}
+
+
+def lonely_provider():
+    return TopicAssignment(
+        subject_id="s9", kind="provider", action="preserve",
+        provider_label="bug", confidence=1.0, rationale="kept",
+        registry_version=-1,
+        result=_fixture_assignment("s9", "topic:x", "X").result,
+    )

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from repo_history.content import ContentIndex, SnapshotContent
 from repo_history.git import (
     BranchObservation,
     CommitRecord,
@@ -357,6 +358,86 @@ def test_map_git_index_adds_direct_commit_file_touches():
     }
     assert all(edge.valid_from in (T0, DAY_ONE) for edge in touches)
     assert all(edge.evidence_ids for edge in touches)
+    assert all(edge.properties.get("hierarchical") is True for edge in touches)
+
+
+def test_map_imports_resolves_absolute_relative_and_package_imports():
+    from repo_history.content import CodeDocument, ImportRecord, ParsedContent
+    from repo_history.git import TreeEntryRecord
+    from repo_history.graph import IMPORTS, map_imports
+
+    def parsed(content_id, *records):
+        return ParsedContent(
+            content_id=content_id, blob_id=f"blob:{content_id}", oid="o" * 40,
+            media_type="python", status="parsed", language="python",
+            code=CodeDocument(language="python", imports=tuple(records)),
+        )
+
+    def tree(path):
+        return TreeEntryRecord(
+            snapshot_id=f"snap:{path}", commit_sha="c" * 40, path=path,
+            object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+            is_binary=False, is_lfs_pointer=False, content_status="inspected",
+            source_url=f"{REPOSITORY_URL}/blob/{'c' * 40}/{path}",
+        )
+
+    paths = [
+        "models/gcn.py", "tests/t.py", "models/__init__.py",
+        "models/graphnet.py", "tf_gnns/models/gcn.py", "tf_gnns/__init__.py",
+    ]
+    content_ids = {
+        "models/gcn.py": "c:gcn", "tests/t.py": "c:t", "models/__init__.py": "c:init",
+    }
+    content = ContentIndex(
+        contents=(
+            parsed(
+                "c:gcn",
+                ImportRecord(kind="import", module=None, names=("torch",), line=1),
+                ImportRecord(kind="from", module="models", names=("graphnet",), line=2),
+                ImportRecord(kind="import", module=None, names=("os",), line=3),
+            ),
+            parsed(
+                "c:t",
+                ImportRecord(kind="from", module="tf_gnns.models", names=("gcn",), line=1),
+                ImportRecord(kind="from", module="tf_gnns", names=(), line=2),
+                ImportRecord(kind="import", module=None, names=("sys",), line=3),
+            ),
+            parsed(
+                "c:init",
+                ImportRecord(kind="from", module=None, names=("gcn",), line=1, level=1),
+            ),
+        ),
+        snapshots=tuple(
+            SnapshotContent(
+                snapshot_id=f"snap:{path}", commit_sha="c" * 40, path=path,
+                oid="o" * 40,
+                content_id=content_ids.get(path, f"c:{path}"),
+                status="parsed", media_type="python", language="python",
+                module=None, is_baseline=False, source_url="u",
+            )
+            for path in paths
+        ),
+    )
+    index = GitIndex(
+        selection=selection(
+            (commit("c" * 40, committed_at=DAY_ONE),),
+            (commit("b" * 40, committed_at=T0),),
+        ),
+        snapshots=tuple(tree(path) for path in paths),
+    )
+
+    mapped = map_imports(content, index, ids(), run_id=RUN_ID)
+
+    targets = {(edge.source, edge.target) for edge in mapped.relationships}
+    assert (ids().file("models/gcn.py"), ids().file("models/graphnet.py")) in targets
+    assert (ids().file("tests/t.py"), ids().file("tf_gnns/models/gcn.py")) in targets
+    assert (ids().file("tests/t.py"), ids().file("tf_gnns/__init__.py")) in targets
+    assert (ids().file("models/__init__.py"), ids().file("models/gcn.py")) in targets
+    # Third-party and stdlib imports are reported, never invented.
+    assert any("imports-external" in gap for gap in mapped.skipped)
+    assert all(edge.edge_type == IMPORTS for edge in mapped.relationships)
+    # Same import seen twice maps once per commit.
+    assert len({edge.edge_id for edge in mapped.relationships}) == len(mapped.relationships)
 
 
 def test_map_registry_and_assignments_cover_topics_and_about_edges():
@@ -387,7 +468,10 @@ def test_map_registry_and_assignments_cover_topics_and_about_edges():
     assignments = [
         topic_assignment("snap:guide", first.topic_id, "sparse-training"),
         topic_assignment("workitem:github:10", merged.topic_id, "graph-learning"),
-        topic_assignment("workitem:github:10", "bug", "bug", kind="provider", action="preserve"),
+        topic_assignment(
+        "workitem:github:10", "bug", "bug",
+        kind="provider", action="preserve",
+    ),
     ]
     linked = map_topic_assignments(assignments, ids(), run_id=RUN_ID)
 
@@ -432,6 +516,24 @@ def test_about_and_touches_edges_persist_and_count(tmp_path):
 # ---------------------------------------------------------------------------
 # Sink writes and reads
 # ---------------------------------------------------------------------------
+
+
+def test_file_entities_carry_language_and_edges_flag_hierarchy(tmp_path):
+    boundary = commit("b" * 40, committed_at=T0)
+    tip = commit("c" * 40, parents=(boundary.sha,), committed_at=DAY_ONE)
+    mapped = map_git_index(git_index(selection((tip,), (boundary,))), ids(), run_id=RUN_ID)
+
+    files = [entity for entity in mapped.entities if entity.labels == ("File",)]
+    assert files and all(entity.properties["path"] == "x.py" for entity in files)
+    assert all(entity.properties["language"] == "python" for entity in files)
+    assert all(entity.properties["media_type"] == "python" for entity in files)
+
+    hierarchical = {
+        edge.edge_type
+        for edge in mapped.relationships
+        if edge.properties.get("hierarchical") is True
+    }
+    assert {"PARENT_COMMIT", "MEMBER_OF", "OF_FILE", "TOUCHES", "TIP_OF"} <= hierarchical
 
 
 def test_sink_round_trip_with_provenance(tmp_path):

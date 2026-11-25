@@ -16,10 +16,10 @@ import json
 from datetime import datetime
 from typing import Any, Sequence
 
-from .content import ContentIndex
+from .content import ContentIndex, detect_language
 from .git import GitIndex
 from .github import GitHubDiscovery
-from .graph import RelationshipWrite
+from .graph import HIERARCHICAL_EDGE_TYPES, RelationshipWrite
 from .ids import IdFactory
 from .labeling import TopicAssignment
 from .linking import LinkRecord, LinkRelation
@@ -174,10 +174,14 @@ def build_viewer_data(
     for write in extra_edges:
         source = canonical_endpoint(write.source)
         target = canonical_endpoint(write.target)
+        hierarchical = bool(write.properties.get("hierarchical", False))
+        if not hierarchical and write.edge_type in HIERARCHICAL_EDGE_TYPES:
+            hierarchical = True
         extra.append({
             "source": source,
             "target": target,
             "relation": write.edge_type,
+            "hierarchical": hierarchical,
             "inferred": write.edge_type == "RELATED_TO" and write.origin == "linking",
             "rationale": str(write.properties.get("rationale", write.edge_type)),
             "evidence": len(write.evidence_ids),
@@ -210,9 +214,11 @@ def build_viewer_data(
         first_seen = min(moments) if moments else None
         if first_seen is not None:
             times[file_id] = first_seen
+        language = detect_language(path)
         add(
             file_id, "File", path[-34:], title=path, time=_iso(first_seen),
-            props={"path": path},
+            language=language,
+            props={"path": path, "language": language},
             prov={"method": "linking", "run_id": run_id,
                   "horizon": info_horizon.isoformat()},
         )
@@ -283,6 +289,7 @@ def build_viewer_data(
             "source": link.source_id,
             "target": link.target_id,
             "relation": link.relation.value,
+            "hierarchical": False,
             "inferred": link.relation is LinkRelation.RELATED_TO
             and link.method == "link-inference",
             "rationale": link.rationale[:200],
@@ -351,9 +358,14 @@ button { margin: 2px; }
 <div class="row">anchor pull <input type="range" id="anchor" min="0" max="30" value="6"></div>
 <div class="row">time spread <input type="range" id="spread" min="0" max="40" value="14"></div>
 <div class="row">link distance <input type="range" id="ldist" min="20" max="240" value="90"></div>
+<div class="row">link pull <input type="range" id="lpull" min="5" max="100" value="25"></div>
+<div class="row">hierarchical pull ×<input type="range" id="hier" min="100" max="300" value="160"></div>
 <div class="row">repulsion <input type="range" id="charge" min="0" max="400" value="140"></div>
+<div class="row">label spread <input type="range" id="labspread" min="0" max="100" value="60"></div>
 <div class="row"><label><input type="checkbox" id="labels" checked> labels</label>
-<label><input type="checkbox" id="bytime"> color by time</label></div>
+<label><input type="checkbox" id="bytime"> color by time</label>
+<label><input type="checkbox" id="filecolors" checked> color files by type</label>
+<label><input type="checkbox" id="nolap" checked> separate labels</label></div>
 <h3>Search</h3><div class="row"><input type="text" id="search" placeholder="label substring"><button id="find">Find</button></div>
 <div class="row"><button id="pause">Pause</button><button id="reset">Reset view</button></div>
 <h3>Details</h3><div id="details">Click a node to inspect its relations.</div>
@@ -389,7 +401,7 @@ const DATA = __DATA__;
 
   // --- temporal forces: anchor pulls every x to mid-time center; ---
   // --- spread pulls left/right with strength growing from mid-time. ---
-  const P = { anchor: 0.06, base: 0.015, far: 0.14, gamma: 1.0 };
+  const P = { anchor: 0.06, base: 0.015, far: 0.14, gamma: 1.0, link: 0.25, hierMult: 1.6, label: 0.6 };
   function temporalForce() {
     let nodes = [];
     function force(alpha) {
@@ -405,12 +417,58 @@ const DATA = __DATA__;
   }
   const tForce = temporalForce();
 
+  // --- soft label-separation force: nudges label offsets (never nodes) ---
+  // --- so overlapping captions drift apart instead of stacking.        ---
+  function labelForce() {
+    let nodes = [];
+    let enabled = true;
+    function force(alpha) {
+      if (!enabled) return;
+      const k = P.label * alpha;
+      for (const n of nodes) {
+        if (n.tx === undefined) { n.tx = 12; n.ty = 4; }
+        if (n._hide) continue;
+        n.tx += (12 - n.tx) * 0.03 * alpha;
+        n.ty += (4 - n.ty) * 0.03 * alpha;
+      }
+      for (let i = 0; i < nodes.length; i++) {
+        const a = nodes[i];
+        if (a._hide || a.tx === undefined) continue;
+        const ax0 = a.x + a.tx, ax1 = ax0 + a.label.length * 6.2, ay0 = a.y + a.ty - 7, ay1 = a.y + a.ty + 7;
+        for (let j = i + 1; j < nodes.length; j++) {
+          const b = nodes[j];
+          if (b._hide || b.tx === undefined) continue;
+          const bx0 = b.x + b.tx, bx1 = bx0 + b.label.length * 6.2, by0 = b.y + b.ty - 7, by1 = b.y + b.ty + 7;
+          const ox = Math.min(ax1, bx1) - Math.max(ax0, bx0);
+          if (ox <= 0) continue;
+          const oy = Math.min(ay1, by1) - Math.max(ay0, by0);
+          if (oy <= 0) continue;
+          if (oy < ox + 6) {
+            const push = (oy / 2 + 1) * k;
+            const dir = ((ay0 + ay1) / 2 <= (by0 + by1) / 2) ? -1 : 1;
+            a.ty += dir * push; b.ty -= dir * push;
+          } else {
+            const push = (ox / 2 + 1) * k;
+            const dir = ((ax0 + ax1) / 2 <= (bx0 + bx1) / 2) ? -1 : 1;
+            a.tx += dir * push; b.tx -= dir * push;
+          }
+        }
+      }
+    }
+    force.initialize = (_) => { nodes = _; };
+    force.enabled = (v) => { if (v === undefined) return enabled; enabled = v; };
+    return force;
+  }
+  const lForce = labelForce();
+
   const sim = d3.forceSimulation(DATA.nodes)
-    .force('link', d3.forceLink(DATA.edges).id(d => d.id).distance(90))
+    .force('link', d3.forceLink(DATA.edges).id(d => d.id).distance(90)
+      .strength(e => e.hierarchical ? P.link * P.hierMult : P.link))
     .force('charge', d3.forceManyBody().strength(-140))
     .force('collide', d3.forceCollide().radius(22))
     .force('anchor', d3.forceX(CX).strength(P.anchor))
     .force('spread', tForce)
+    .force('labels', lForce)
     .force('yc', d3.forceY(CY).strength(0.06));
   DATA.nodes.forEach((n, i) => {
     n.x = n.t == null ? CX + ((i % 9) - 4) * 8 : CX + (n.t - 0.5) * W * 0.7;
@@ -435,20 +493,30 @@ const DATA = __DATA__;
     })
     .on('mouseout', () => { document.getElementById('tip').style.display = 'none'; });
   node.append('circle').attr('r', 9).attr('fill', d => kindColor(d.kind)).attr('stroke', '#333');
-  node.append('text').attr('dx', 12).attr('dy', 4).attr('font-size', 11).text(d => d.label);
+  node.append('text').attr('font-size', 11).text(d => d.label);
   svg.on('click', () => select(null));
 
   sim.on('tick', () => {
     link.attr('x1', e => e.source.x).attr('y1', e => e.source.y)
         .attr('x2', e => e.target.x).attr('y2', e => e.target.y);
     node.attr('transform', d => `translate(${d.x},${d.y})`);
+    node.select('text')
+        .attr('x', d => d.tx === undefined ? 12 : d.tx)
+        .attr('y', d => d.ty === undefined ? 4 : d.ty);
   });
 
+  const fileLangs = [...new Set(DATA.nodes.filter(n => n.kind === 'File').map(n => n.language || 'unknown'))];
+  const langColor = d3.scaleOrdinal(d3.schemeSet2).domain(fileLangs);
+
   function paint() {
-    node.select('circle').attr('fill', d => colorByTime ? (d.t == null ? '#999' : timeColor(d.t)) : kindColor(d.kind));
+    node.select('circle').attr('fill', d => {
+      if (colorByTime) return d.t == null ? '#999' : timeColor(d.t);
+      if (fileTypeColors && d.kind === 'File') return langColor(d.language || 'unknown');
+      return kindColor(d.kind);
+    });
     node.select('text').style('display', showLabels ? null : 'none');
   }
-  let showLabels = true, colorByTime = false;
+  let showLabels = true, colorByTime = false, fileTypeColors = true;
 
   function visible() {
     const onKinds = new Set([...document.querySelectorAll('#kindFilters input:checked')].map(i => i.value));
@@ -460,6 +528,7 @@ const DATA = __DATA__;
     node.style('display', d => keepN.has(d) ? null : 'none');
     link.style('display', e => keepE.includes(e) ? null : 'none');
     node.classed('dim', d => !(d.t == null || (d.t >= lo && d.t <= hi)));
+    DATA.nodes.forEach(n => { n._hide = !keepN.has(n); });
     sim.nodes([...keepN]);
     sim.force('link').links(keepE);
     sim.alpha(0.5).restart();
@@ -502,9 +571,14 @@ const DATA = __DATA__;
   document.getElementById('anchor').oninput = ev => { P.anchor = +ev.target.value / 100; sim.force('anchor').strength(P.anchor); sim.alpha(0.4).restart(); };
   document.getElementById('spread').oninput = ev => { P.far = +ev.target.value / 100; sim.alpha(0.4).restart(); };
   document.getElementById('ldist').oninput = ev => { sim.force('link').distance(+ev.target.value); sim.alpha(0.4).restart(); };
+  document.getElementById('lpull').oninput = ev => { P.link = +ev.target.value / 100; sim.alpha(0.4).restart(); };
+  document.getElementById('hier').oninput = ev => { P.hierMult = +ev.target.value / 100; sim.alpha(0.4).restart(); };
   document.getElementById('charge').oninput = ev => { sim.force('charge').strength(-ev.target.value); sim.alpha(0.4).restart(); };
+  document.getElementById('labspread').oninput = ev => { P.label = +ev.target.value / 100; sim.alpha(0.4).restart(); };
   document.getElementById('labels').onchange = ev => { showLabels = ev.target.checked; paint(); };
   document.getElementById('bytime').onchange = ev => { colorByTime = ev.target.checked; paint(); };
+  document.getElementById('filecolors').onchange = ev => { fileTypeColors = ev.target.checked; paint(); };
+  document.getElementById('nolap').onchange = ev => { lForce.enabled(ev.target.checked); sim.alpha(0.4).restart(); };
   document.getElementById('find').onclick = () => {
     const q = document.getElementById('search').value.toLowerCase();
     const hit = DATA.nodes.find(n => n.label.toLowerCase().includes(q));
@@ -517,6 +591,8 @@ const DATA = __DATA__;
   document.getElementById('reset').onclick = () => { svg.transition().call(d3.zoom().transform, d3.zoomIdentity); select(null); };
   const lg = document.getElementById('legend');
   kinds.forEach(k => { lg.innerHTML += `<div><span style="display:inline-block;width:10px;height:10px;background:${kindColor(k)}"></span> ${k}</div>`; });
+  if (fileLangs.length) lg.innerHTML += '<div>files by type:</div>';
+  fileLangs.forEach(l => { lg.innerHTML += `<div>&nbsp;&nbsp;<span style="display:inline-block;width:10px;height:10px;background:${langColor(l)}"></span> ${esc(l)}</div>`; });
   lg.innerHTML += '<div><span style="color:#1f6feb">━━</span> factual link</div><div><span style="color:#9e6a03">┅</span> inferred link</div>';
   paint();
 })();

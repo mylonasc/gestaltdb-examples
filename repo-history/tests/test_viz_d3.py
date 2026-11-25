@@ -303,7 +303,8 @@ def test_extra_edges_join_kept_nodes_with_factual_default():
     by_pair = {(edge["source"], edge["target"]): edge for edge in data["edges"]}
     assert by_pair[(ids().commit(MID), ids().commit(ROOT))]["relation"] == "PARENT_COMMIT"
     assert by_pair[(ids().commit(TIP), ids().file("docs/guide.md"))]["relation"] == "TOUCHES"
-    assert by_pair[(ids().work_item("github", 10), ids().topic("sparse"))]["relation"] == "ABOUT"
+    pair = by_pair[(ids().work_item("github", 10), ids().topic("sparse"))]
+    assert pair["relation"] == "ABOUT"
     # The snapshot-subject ABOUT aggregates to the same file edge.
     assert ("snap:guide", ids().topic("sparse")) not in by_pair
     assert by_pair[(ids().commit(MID), ids().commit(ROOT))]["inferred"] is False
@@ -328,6 +329,40 @@ def test_extra_linking_related_to_edges_are_flagged_inferred():
     by_target = {edge["target"]: edge for edge in data["edges"]}
     assert by_target[ids().topic("sparse")]["inferred"] is True
     assert by_target[ids().file("docs/guide.md")]["inferred"] is False
+
+
+def test_extra_edges_carry_hierarchical_flags():
+    arguments = fixture_inputs()
+    arguments["extra_edges"] = [
+        writes_edge(ids().commit(MID), ids().commit(ROOT), "PARENT_COMMIT"),
+        writes_edge(ids().work_item("github", 10), ids().topic("sparse"), "ABOUT"),
+    ]
+    data = build_viewer_data(**arguments)
+
+    by_pair = {(edge["source"], edge["target"]): edge for edge in data["edges"]}
+    assert by_pair[(ids().commit(MID), ids().commit(ROOT))]["hierarchical"] is True
+    pair = by_pair[(ids().work_item("github", 10), ids().topic("sparse"))]
+    assert pair["relation"] == "ABOUT"
+    assert pair["hierarchical"] is False
+
+
+def test_file_nodes_carry_a_distinguishing_language():
+    data = build_viewer_data(**fixture_inputs())
+    by_id = {node["id"]: node for node in data["nodes"]}
+
+    assert by_id[ids().file("docs/guide.md")]["language"] == "markdown"
+    assert by_id[ids().file("docs/guide.md")]["kind"] == "File"
+
+
+def test_viewer_page_has_label_hierarchy_and_file_controls():
+    html = render_viewer_html(build_viewer_data(**fixture_inputs()))
+
+    for control in ("hier", "labspread", "lpull", "filecolors", "nolap"):
+        assert f'id="{control}"' in html
+    for hook in ("labelForce", "hierMult", "langColor", "fileTypeColors", "lForce.enabled"):
+        assert hook in html
+    assert "color files by type" in html
+    assert "separate labels" in html
 
 
 def test_export_is_deterministic():

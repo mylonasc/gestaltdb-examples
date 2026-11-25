@@ -18,18 +18,25 @@ from repo_history.content import ContentExtractor
 from repo_history.git import GitHistory
 from repo_history.github import EvidenceCache, GitHubCredentials, GitHubDiscoverer
 from repo_history.graph import (
+    CHILD_OF,
     PARENT_COMMIT,
     TIP_OF,
     TOUCHES,
+    map_discovery,
     map_git_index,
+    map_imports,
     map_topic_assignments,
 )
 from repo_history.ids import IdFactory
 from repo_history.labeling import (
     DeterministicLabeler,
+    assign_commit,
     extract_snapshot_features,
     extract_work_item_features,
-    seed_registry,
+    register_prevalent,
+    seed_commit_type_registry,
+    seed_structural_registry,
+    topic_membership,
 )
 from repo_history.linking import (
     infer_topical_links,
@@ -77,24 +84,39 @@ def main() -> None:
         history.close()
 
     labeler = DeterministicLabeler(config.labeling)
-    registry = seed_registry(at=now)
+    # Seed prevalent aspects first: repository layout plus commit types.
+    # Per-subject proposals below can only register when shared.
+    all_paths = sorted({snapshot.path for snapshot in content.snapshots})
+    registry = seed_structural_registry(
+        all_paths, at=now, created_by=RUN_ID, ids=ids
+    )
+    registry = seed_commit_type_registry(
+        at=now, created_by=RUN_ID, ids=ids, base=registry
+    )
+    known_items = {
+        item.number: ids.work_item("github", item.number) for item in discovery.work_items
+    }
     file_features = [
         extract_snapshot_features(
             snap, content.content_for(snap.snapshot_id), subject_id=snap.snapshot_id
         )
         for snap in content.snapshots
     ]
+    # Pass 1: collect proposals without registering singletons.
+    proposals: dict[str, list[str]] = {}
     for features in file_features:
         got = labeler.assign(
             features, registry, subject_id=features.subject_id,
             run_id=RUN_ID, info_horizon=now,
         )
-        proposed = got.result.value["proposed_name"]
-        if got.action == "propose" and registry.lookup(proposed) is None:
-            registry, _ = registry.register(
-                proposed, at=now, created_by=RUN_ID, ids=ids,
-                description=features.text(),
-            )
+        name = got.result.value.get("proposed_name")
+        if got.action == "propose" and name and registry.lookup(name) is None:
+            proposals.setdefault(name, []).append(features.text())
+    registry, _ = register_prevalent(
+        registry, proposals, min_subjects=2, at=now, created_by=RUN_ID, ids=ids
+    )
+    singletons = sum(1 for texts in proposals.values() if len(set(texts)) < 2)
+    # Pass 2: decide against structural, commit-type, and prevalent topics.
     item_assignments, file_assignments = {}, {}
     for item in discovery.work_items:
         workflow = extract_work_item_features(item, subject_id=f"workitem:github:{item.number}")
@@ -107,16 +129,45 @@ def main() -> None:
             labeler.assign(features, registry, subject_id=features.subject_id,
                            run_id=RUN_ID, info_horizon=now)
         ]
+    touched: dict[str, list[str]] = {}
+    for entry in index.snapshots:
+        touched.setdefault(entry.commit_sha, []).append(entry.path)
+    commit_assignments = []
+    for record in (*selection.selected_commits, *selection.boundary_commits):
+        commit_assignments.append(
+            assign_commit(
+                record.message, touched.get(record.sha, []), registry,
+                subject_id=ids.commit(record.sha), run_id=RUN_ID, info_horizon=now,
+                ids=ids,
+            )
+        )
+    # Work items get the same deterministic commit-type topics as commits
+    # (title plus body as the message); TF-IDF assignments above still drive
+    # item-file topical links.
+    item_type_assignments = []
+    for item in discovery.work_items:
+        item_type_assignments.append(
+            assign_commit(
+                f"{item.title}\n{item.body or ''}", [], registry,
+                subject_id=known_items[item.number], run_id=RUN_ID,
+                info_horizon=now, ids=ids,
+            )
+        )
     assignments = [
         assignment
         for mapping in (item_assignments, file_assignments)
         for group in mapping.values()
         for assignment in group
-    ]
+    ] + commit_assignments + item_type_assignments
+    membership = topic_membership(assignments)
+    prevalent = {t: s for t, s in membership.items() if len(s) >= 2}
+    print(
+        f"topics: {len(registry.topics)} registered, "
+        f"{len(prevalent)} prevalent (>{1} subjects), "
+        f"{singletons} singleton proposals left unregistered",
+        flush=True,
+    )
 
-    known_items = {
-        item.number: ids.work_item("github", item.number) for item in discovery.work_items
-    }
     known_commits = {
         record.sha for record in (*selection.selected_commits, *selection.boundary_commits)
     }
@@ -168,6 +219,9 @@ def main() -> None:
         extra_edges=[
             *(r for r in map_git_index(index, ids, run_id=RUN_ID).relationships
               if r.edge_type in (PARENT_COMMIT, TIP_OF, TOUCHES)),
+            *(r for r in map_discovery(discovery, ids, run_id=RUN_ID).relationships
+              if r.edge_type == CHILD_OF),
+            *map_imports(content, index, ids, run_id=RUN_ID).relationships,
             *map_topic_assignments(assignments, ids, run_id=RUN_ID).relationships,
         ],
     )

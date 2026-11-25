@@ -20,8 +20,9 @@ superseded instead of deleting them.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from datetime import datetime
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -33,15 +34,25 @@ from .ids import IdFactory
 from .models import EvidenceRef, FrozenModel, GraphSettings, LabelingSettings, ensure_utc
 
 __all__ = [
+    "COMMIT_TYPE_DESCRIPTIONS",
+    "COMMIT_TYPE_KEYWORDS",
     "CandidateTopic",
+    "CommitClassification",
     "ContentFeatures",
     "DeterministicLabeler",
     "TopicAssignment",
     "TopicRecord",
     "TopicRegistry",
+    "assign_commit",
+    "classify_commit",
+    "extract_commit_features",
     "extract_snapshot_features",
     "extract_work_item_features",
+    "register_prevalent",
+    "seed_commit_type_registry",
     "seed_registry",
+    "seed_structural_registry",
+    "topic_membership",
 ]
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
@@ -330,6 +341,269 @@ def seed_registry(*, at: datetime) -> TopicRegistry:
     """Start from an empty, versioned registry; nothing is pre-invented."""
 
     return TopicRegistry(version=0, topics=(), updated_at=ensure_utc(at))
+
+
+COMMIT_TYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "bug-fix": ("fix", "bug", "error", "exception", "crash", "regression", "patch", "hotfix"),
+    "refactoring": ("refactor", "restructure", "rename", "reorganise",
+                    "reorganize", "cleanup", "simplify"),
+    "feature": ("add", "new", "implement", "support", "introduce", "enable"),
+    "documentation": ("doc", "docs", "readme", "guide", "comment", "tutorial", "changelog"),
+    "testing": ("test", "tests", "testing", "spec", "coverage", "pytest", "unittest"),
+    "build-ci": ("ci", "workflow", "action", "pipeline", "build", "deploy", "publish"),
+    "version-release": ("version", "bump", "release", "tag"),
+}
+
+COMMIT_TYPE_DESCRIPTIONS: dict[str, str] = {
+    "bug-fix": "Commits that correct defects: fixes, errors, crashes, and regressions.",
+    "refactoring": "Commits that restructure code without changing behavior.",
+    "feature": "Commits that add new capabilities or support.",
+    "documentation": "Commits that change docs, guides, READMEs, or comments.",
+    "testing": "Commits that add or adjust tests and coverage.",
+    "build-ci": "Commits that touch CI workflows, pipelines, or release automation.",
+    "version-release": "Commits that bump versions, tag, or cut releases.",
+}
+
+
+def _commit_type_scores(message: str, touched_paths: Sequence[str]) -> Counter[str]:
+    tokens: list[str] = list(_tokens(message))
+    for path in touched_paths:
+        tokens.extend(_path_tokens(path))
+    counts: Counter[str] = Counter()
+    for topic, keywords in COMMIT_TYPE_KEYWORDS.items():
+        keyword_set = set(keywords)
+        counts[topic] = sum(1 for token in tokens if token in keyword_set)
+    return counts
+
+
+class CommitClassification(FrozenModel):
+    topic_name: str | None = None
+    confidence: float = 0.0
+    matched_terms: tuple[str, ...] = ()
+    action: Literal["reuse", "abstain"] = "abstain"
+
+
+def classify_commit(message: str, touched_paths: Sequence[str]) -> CommitClassification:
+    """Classify a commit into a prevalent commit-type topic, or abstain.
+
+    Scores are keyword hits over the message plus touched-path tokens;
+    confidence is the winner's share of all hits, so mixed signals score
+    lower.  No hits means no evidence, hence abstention instead of a guess.
+    """
+
+    counts = _commit_type_scores(message, touched_paths)
+    total = sum(counts.values())
+    if total == 0:
+        return CommitClassification()
+    ordered = sorted(COMMIT_TYPE_KEYWORDS, key=lambda name: (-counts[name], name))
+    winner = ordered[0]
+    subject_tokens = list(_tokens(message))
+    for path in touched_paths:
+        subject_tokens.extend(_path_tokens(path))
+    matched = sorted(
+        {token for token in subject_tokens if token in set(COMMIT_TYPE_KEYWORDS[winner])}
+    )
+    return CommitClassification(
+        topic_name=winner,
+        confidence=counts[winner] / total,
+        matched_terms=tuple(matched),
+        action="reuse",
+    )
+
+
+def seed_commit_type_registry(
+    *, at: datetime, created_by: str, ids: IdFactory, base: TopicRegistry | None = None
+) -> TopicRegistry:
+    """Seed the prevalent commit-type topics; descriptions carry the keywords."""
+
+    registry = base if base is not None else seed_registry(at=at)
+    for name in COMMIT_TYPE_KEYWORDS:
+        if registry.lookup(name) is not None:
+            continue
+        registry, _ = registry.register(
+            name, at=at, created_by=created_by, ids=ids,
+            description=COMMIT_TYPE_DESCRIPTIONS[name],
+        )
+    return registry
+
+
+def seed_structural_registry(
+    paths: Sequence[str],
+    *,
+    at: datetime,
+    created_by: str,
+    ids: IdFactory,
+    min_files: int = 2,
+    base: TopicRegistry | None = None,
+) -> TopicRegistry:
+    """Seed one topic per well-populated top-level directory.
+
+    Topics represent prevalent architectural areas (``models/``,
+    ``docs/`` …): the description lists member basenames so later subjects
+    retrieve the topic by shared vocabulary instead of proposing singletons.
+    Root-level files get no structural topic.
+    """
+
+    registry = base if base is not None else seed_registry(at=at)
+    members: dict[str, set[str]] = {}
+    for path in paths:
+        parts = path.split("/")
+        if len(parts) < 2 or not parts[0]:
+            continue
+        members.setdefault(parts[0], set()).add(parts[-1])
+    for directory in sorted(members):
+        basenames = sorted(members[directory])
+        if len(basenames) < min_files:
+            continue
+        if registry.lookup(directory) is not None:
+            continue
+        shown = ", ".join(basenames[:12])
+        if len(basenames) > 12:
+            shown += ", …"
+        registry, _ = registry.register(
+            directory, at=at, created_by=created_by, ids=ids,
+            description=f"Files under {directory}/: {shown}.",
+        )
+    return registry
+
+
+def register_prevalent(
+    registry: TopicRegistry,
+    proposals: Mapping[str, Sequence[str]],
+    *,
+    min_subjects: int = 2,
+    at: datetime,
+    created_by: str,
+    ids: IdFactory,
+) -> tuple[TopicRegistry, dict[str, TopicRecord]]:
+    """Register only proposals shared by enough subjects.
+
+    ``proposals`` maps a proposed name to the feature texts of its
+    proposers; names below ``min_subjects`` stay unregistered, so singleton
+    phrases never become topics.  Already-known names resolve to the existing
+    record instead of duplicating.
+    """
+
+    registered: dict[str, TopicRecord] = {}
+    for name in sorted(proposals):
+        texts = [text for text in proposals[name] if text.strip()]
+        if registry.lookup(name) is not None:
+            existing = registry.lookup(name)
+            assert existing is not None
+            registered[name] = existing
+            continue
+        if len(texts) < min_subjects:
+            continue
+        kept = sorted(set(texts))[:4]
+        description = " ".join(text[:400] for text in kept)
+        registry, record = registry.register(
+            name, at=at, created_by=created_by, ids=ids, description=description
+        )
+        registered[name] = record
+    return registry, registered
+
+
+def extract_commit_features(
+    message: str, touched_paths: Sequence[str], *, subject_id: str
+) -> ContentFeatures:
+    """Deterministic features for a commit: message plus touched paths."""
+
+    path_tokens: list[str] = []
+    for path in touched_paths:
+        path_tokens.extend(_path_tokens(path))
+    return ContentFeatures(
+        subject_id=subject_id,
+        path_tokens=tuple(path_tokens),
+        title_tokens=_tokens(message),
+    )
+
+
+def assign_commit(
+    message: str,
+    touched_paths: Sequence[str],
+    registry: TopicRegistry,
+    *,
+    subject_id: str,
+    run_id: str,
+    info_horizon: datetime,
+    ids: IdFactory,
+) -> TopicAssignment:
+    """Assign a commit to a prevalent commit-type topic, or abstain."""
+
+    horizon = ensure_utc(info_horizon)
+    decision = classify_commit(message, touched_paths)
+    if decision.action == "abstain" or decision.topic_name is None:
+        result = AnalysisResult.create(
+            subject_id=subject_id,
+            kind="topic",
+            status=DecisionStatus.ABSTAINED,
+            value={
+                "action": "abstain",
+                "topic_id": None,
+                "proposed_name": None,
+                "registry_version": registry.version,
+                "candidates": [],
+            },
+            provenance=Provenance(
+                method="deterministic-commit-classifier",
+                method_version="1",
+                run_id=run_id,
+                info_horizon=horizon,
+            ),
+            evidence=(),
+            error="abstained: no commit-type signal",
+        )
+        return TopicAssignment(
+            subject_id=subject_id, kind="derived", action="abstain",
+            confidence=0.0,
+            rationale="No commit-type keywords in the message or touched paths.",
+            registry_version=registry.version, result=result,
+        )
+    record = registry.lookup(decision.topic_name)
+    topic_id = record.topic_id if record is not None else ids.topic(decision.topic_name)
+    result = AnalysisResult.create(
+        subject_id=subject_id,
+        kind="topic",
+        status=DecisionStatus.ACCEPTED,
+        value={
+            "action": "reuse",
+            "topic_id": topic_id,
+            "proposed_name": None,
+            "registry_version": registry.version,
+            "candidates": [],
+        },
+        provenance=Provenance(
+            method="deterministic-commit-classifier",
+            method_version="1",
+            run_id=run_id,
+            info_horizon=horizon,
+        ),
+        evidence=(),
+    )
+    return TopicAssignment(
+        subject_id=subject_id, kind="derived", action="reuse",
+        topic_id=topic_id, topic_name=decision.topic_name,
+        confidence=decision.confidence,
+        rationale=(
+            f"Reusing commit-type topic {decision.topic_name!r}: "
+            f"matched {list(decision.matched_terms)}."
+        ),
+        matched_terms=decision.matched_terms,
+        registry_version=registry.version, result=result,
+    )
+
+
+def topic_membership(
+    assignments: Sequence[TopicAssignment],
+) -> dict[str, list[str]]:
+    """Map each derived topic to its assigned subjects, deterministically."""
+
+    membership: dict[str, list[str]] = {}
+    for assignment in assignments:
+        if assignment.kind != "derived" or assignment.topic_id is None:
+            continue
+        membership.setdefault(assignment.topic_id, []).append(assignment.subject_id)
+    return {topic: sorted(subjects) for topic, subjects in sorted(membership.items())}
 
 
 class CandidateTopic(FrozenModel):

@@ -162,14 +162,19 @@ sink.write_relationships(mapped.relationships, analysis_run_id=run_id)
 sink.close()
 ```
 
-`map_git_index` emits `Commit`, `Snapshot`, `File`, and `Branch` entities with
-`PARENT_COMMIT`, `MEMBER_OF`, `OF_FILE`, `TOUCHES` (direct commit-to-file
-evidence), and `TIP_OF` relationships; `map_discovery` emits `WorkItem` and
-`ProviderLabel` entities with `HAS_LABEL`, `CHILD_OF`, and `MERGED_AS`
-relationships; `map_registry` emits `Topic` entities and
-`map_topic_assignments` emits `ABOUT` edges from derived topic assignments
-(provider-label preservation assignments carry no topic and are skipped).
-Out-of-scope parents and hierarchy edges are skipped, never invented.
+`map_git_index` emits `Commit`, `Snapshot`, `File` (with detected language and
+media type), and `Branch` entities with `PARENT_COMMIT`, `MEMBER_OF`,
+`OF_FILE`, `TOUCHES` (direct commit-to-file evidence), and `TIP_OF`
+relationships; `map_imports` resolves intra-repository Python imports
+(absolute, relative, and `__init__` packages; third-party imports are
+reported, never invented) into `IMPORTS` file-to-file edges. Structural and
+containment edges (`PARENT_COMMIT`, `MEMBER_OF`, `OF_FILE`, `TOUCHES`,
+`TIP_OF`, `CHILD_OF`) carry `hierarchical: true` provenance for stronger
+graph pulls. `map_discovery` emits `WorkItem` and `ProviderLabel` entities
+with `HAS_LABEL`, `CHILD_OF`, and `MERGED_AS` relationships; `map_registry`
+emits `Topic` entities and `map_topic_assignments` emits `ABOUT` edges from
+deterministic topic assignments (commits, files, and work items). Out-of-scope
+parents and hierarchy edges are skipped, never invented.
 
 Version IDs are deterministic UUIDs, so ingesting the same batch twice is
 idempotent: the driver rejects the duplicate ID and the sink skips it after
@@ -212,8 +217,19 @@ subject, method, horizon, and evidence. Growing the registry (registrations,
 aliases, merges) never rewrites old assignments: they reference the registry
 version they were decided against, merges mark old topics as superseded
 instead of deleting them, and re-running against a kept registry snapshot
-reproduces the original decisions exactly. `LabelingSettings` (`[labeling]`
-section) sets the reuse/alias thresholds, minimum score, and retrieval limit.
+reproduces the original decisions exactly.
+
+Topic modeling favors prevalent aspects of the architecture over singletons.
+`seed_structural_registry` seeds one topic per well-populated top-level
+directory (shared vocabulary pulls its files into reuse instead of proposing
+one-off names); `seed_commit_type_registry` seeds commit-type topics
+(bug-fix, refactoring, feature, documentation, testing, build-ci,
+version-release) decided deterministically from message keywords and touched
+paths (`classify_commit`, `assign_commit`). `register_prevalent` only
+registers a proposal shared by at least `min_subjects` subjects, so one-off
+phrases never become topics, and `topic_membership` reports prevalence per
+topic. `LabelingSettings` (`[labeling]` section) sets the reuse/alias
+thresholds, minimum score, and retrieval limit.
 
 ## LangChain structured LLM enrichment
 
@@ -349,6 +365,13 @@ occurrences aggregate to their file, as the page footer notes) — while
   an anchor force pulls every node toward the mid-time center while a second
   force pulls left/right with strength growing with `|t - 0.5|`, so the plot
   elongates along time as nodes appear.
+- a soft label-separation force nudges overlapping captions apart (toggleable,
+  strength adjustable) instead of moving nodes.
+- hierarchical edges (`PARENT_COMMIT`, `TOUCHES`, `TIP_OF`, `CHILD_OF`, …)
+  pull harder than associative ones via a per-link strength multiplier
+  (configurable `hierarchical pull` slider).
+- files are colored by detected type (source vs docs vs other, toggleable
+  legend) instead of a single file color.
 - nodes without timestamps (deleted branches, unobserved tips) stay centered
   with no time pull; snapshot occurrences aggregate to file nodes and remote
   tracking refs resolve to PR head branches.

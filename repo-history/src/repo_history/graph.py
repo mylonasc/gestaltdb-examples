@@ -32,6 +32,7 @@ from gestaltdb.graphdb import (
     TemporalVersionError,
 )
 
+from .content import ContentIndex, detect_language, media_type_for
 from .git import GitIndex
 from .github import GitHubDiscovery
 from .ids import IdFactory, stable_id
@@ -43,6 +44,7 @@ __all__ = [
     "ABOUT",
     "CHILD_OF",
     "HAS_LABEL",
+    "IMPORTS",
     "MEMBER_OF",
     "MERGED_AS",
     "OF_FILE",
@@ -53,6 +55,7 @@ __all__ = [
     "GraphClosedError",
     "GraphError",
     "GraphSink",
+    "HIERARCHICAL_EDGE_TYPES",
     "MappedGraph",
     "NODE_INDEXES",
     "EDGE_INDEXES",
@@ -61,6 +64,7 @@ __all__ = [
     "WriteReport",
     "map_discovery",
     "map_git_index",
+    "map_imports",
     "map_registry",
     "map_topic_assignments",
 ]
@@ -72,10 +76,18 @@ PARENT_COMMIT = "PARENT_COMMIT"
 MEMBER_OF = "MEMBER_OF"
 OF_FILE = "OF_FILE"
 TOUCHES = "TOUCHES"
+IMPORTS = "IMPORTS"
 HAS_LABEL = "HAS_LABEL"
 CHILD_OF = "CHILD_OF"
 TIP_OF = "TIP_OF"
 MERGED_AS = "MERGED_AS"
+
+#: Edge types that express containment or ancestry.  The sink stamps these
+#: writes with ``properties["hierarchical"] = True``; the visualizer pulls
+#: them harder than associative edges (configurably).
+HIERARCHICAL_EDGE_TYPES = frozenset(
+    {PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, TIP_OF, CHILD_OF}
+)
 
 NODE_INDEXES = ("sha", "path", "number", "name", "prov_run_id")
 EDGE_INDEXES = ("run_id",)
@@ -212,7 +224,7 @@ def map_git_index(
                     edge_type=PARENT_COMMIT,
                     source=logical_id,
                     target=ids.commit(parent),
-                    properties={},
+                    properties={"hierarchical": True},
                     valid_from=record.committed_at,
                     origin="git",
                     origin_id=f"{record.sha}:{parent}",
@@ -258,7 +270,7 @@ def map_git_index(
                 edge_type=MEMBER_OF,
                 source=snapshot_id,
                 target=ids.commit(entry.commit_sha),
-                properties={},
+                properties={"hierarchical": True},
                 valid_from=committed_at,
                 origin="git",
                 origin_id=f"{entry.commit_sha}:{entry.path}:member",
@@ -276,7 +288,7 @@ def map_git_index(
                 edge_type=OF_FILE,
                 source=snapshot_id,
                 target=ids.file(entry.path),
-                properties={},
+                properties={"hierarchical": True},
                 valid_from=committed_at,
                 origin="git",
                 origin_id=f"{entry.commit_sha}:{entry.path}:file",
@@ -295,7 +307,7 @@ def map_git_index(
                 edge_type=TOUCHES,
                 source=ids.commit(entry.commit_sha),
                 target=ids.file(entry.path),
-                properties={},
+                properties={"hierarchical": True},
                 valid_from=committed_at,
                 origin="git",
                 origin_id=f"{entry.commit_sha}:{entry.path}:touches",
@@ -324,7 +336,11 @@ def map_git_index(
             EntityWrite(
                 logical_id=file_id,
                 labels=("File",),
-                properties={"path": path},
+                properties={
+                    "path": path,
+                    "language": detect_language(path),
+                    "media_type": media_type_for(path),
+                },
                 valid_from=valid_from,
                 origin="git",
                 origin_id=path,
@@ -363,7 +379,7 @@ def map_git_index(
                 edge_type=TIP_OF,
                 source=branch_id,
                 target=ids.commit(branch.tip_sha),
-                properties={"contains_anchor": branch.contains_anchor},
+                properties={"contains_anchor": branch.contains_anchor, "hierarchical": True},
                 valid_from=index.selection.window.start,
                 origin="git",
                 origin_id=f"{branch.name}:{branch.tip_sha}",
@@ -496,7 +512,7 @@ def map_discovery(
                 edge_type=CHILD_OF,
                 source=ids.work_item("github", edge.child_number),
                 target=ids.work_item("github", edge.parent_number),
-                properties={"relation": edge.relation},
+                properties={"relation": edge.relation, "hierarchical": True},
                 valid_from=discovery.observed_at,
                 origin="github",
                 origin_id=f"{edge.parent_number}:{edge.child_number}",
@@ -586,9 +602,10 @@ def map_topic_assignments(
     """Map derived topic assignments to ``ABOUT`` entity-topic edges.
 
     Subject IDs follow the layers that produced them: snapshot occurrences
-    stay snapshot IDs (the graph holds ``Snapshot`` nodes under those IDs)
-    while ``workitem:github:N`` subjects resolve to ``WorkItem`` nodes.
-    Provider-label preservation assignments carry no topic and are skipped.
+    stay snapshot IDs (the graph holds ``Snapshot`` nodes under those IDs),
+    bare commit SHAs resolve to ``Commit`` nodes, and ``workitem:github:N``
+    subjects resolve to ``WorkItem`` nodes.  Provider-label preservation
+    assignments carry no topic and are skipped.
     """
 
     relationships: list[RelationshipWrite] = []
@@ -597,10 +614,13 @@ def map_topic_assignments(
         if assignment.kind != "derived" or assignment.topic_id is None:
             skipped.append(f"assignment:{assignment.subject_id} has no derived topic")
             continue
-        match = re.fullmatch(r"workitem:github:(\d+)", assignment.subject_id)
+        workitem = re.fullmatch(r"workitem:github:(\d+)", assignment.subject_id)
+        commit_sha = re.fullmatch(r"[0-9a-fA-F]{40}", assignment.subject_id)
         source = (
-            ids.work_item("github", int(match.group(1)))
-            if match is not None
+            ids.work_item("github", int(workitem.group(1)))
+            if workitem is not None
+            else ids.commit(commit_sha.group(0).lower())
+            if commit_sha is not None
             else assignment.subject_id
         )
         horizon = assignment.result.provenance.info_horizon
@@ -635,6 +655,150 @@ def map_topic_assignments(
     return MappedGraph(
         relationships=tuple(relationships), skipped=tuple(skipped)
     )
+
+
+def _resolve_import(
+    importing_path: str, module: str | None, names: Sequence[str], level: int,
+    known_paths: set[str],
+) -> set[str]:
+    """Resolve an import record to repository-relative file paths.
+
+    Absolute imports resolve from the repository root; relative imports
+    resolve against the importing file's package (``level`` dots climb out).
+    Only ``.py`` files and packages (``__init__.py``) present in
+    ``known_paths`` resolve; third-party and stdlib imports do not.
+    """
+
+    from .content import module_name
+
+    resolved: set[str] = set()
+
+    def candidates(dotted: str) -> list[str]:
+        stem = dotted.replace(".", "/")
+        return [f"{stem}.py", f"{stem}/__init__.py"]
+
+    if level == 0:
+        targets = [module] if module else []
+        targets.extend(f"{module}.{name}" for name in names if module and name != "*")
+        targets.extend(name for name in names if not module and name != "*")
+        for dotted in targets:
+            for candidate in candidates(dotted):
+                if candidate in known_paths:
+                    resolved.add(candidate)
+        return resolved
+
+    package = module_name(importing_path)
+    if package is None:
+        return resolved
+    if importing_path.replace("\\", "/").endswith("__init__.py"):
+        package_parts: list[str] = package.split(".")
+    else:
+        package_parts = package.split(".")[:-1]
+    climb = level - 1
+    if climb > len(package_parts):
+        return resolved  # relative import beyond the top-level package
+    base = package_parts[: len(package_parts) - climb] if climb else package_parts
+
+    def qualify(name: str | None) -> str | None:
+        if name is None:
+            return ".".join(base) if base else None
+        return ".".join([*base, name]) if base else name
+
+    targets = [qualify(module)]
+    targets.extend(qualify(name) for name in names if name != "*")
+    for dotted in targets:
+        if not dotted:
+            continue
+        for candidate in candidates(dotted):
+            if candidate in known_paths:
+                resolved.add(candidate)
+    return resolved
+
+
+def map_imports(
+    content: ContentIndex, index: GitIndex, ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Map resolved intra-repository Python imports to ``IMPORTS`` edges.
+
+    One edge per (importing file, imported file) pair per commit; external
+    and unresolvable imports are summarized once in ``skipped`` instead of
+    inventing targets.  Edge IDs omit the commit so re-observation across
+    commits becomes versions of one edge rather than duplicates.
+    """
+
+    relationships: list[RelationshipWrite] = []
+    skipped_external = 0
+    commit_times = {
+        record.sha: record.committed_at
+        for record in (*index.selection.selected_commits, *index.selection.boundary_commits)
+    }
+    known_paths = {entry.path for entry in index.snapshots}
+    source_urls = {
+        (entry.commit_sha, entry.path): entry.source_url
+        for entry in index.snapshots
+    }
+    seen: set[tuple[str, str, str]] = set()
+
+    for entry in index.snapshots:
+        committed_at = commit_times.get(entry.commit_sha)
+        if committed_at is None:
+            continue
+        parsed = content.content_for(entry.snapshot_id)
+        if (
+            parsed is None
+            or parsed.status != "parsed"
+            or parsed.code is None
+        ):
+            continue
+        source_id = ids.file(entry.path)
+        for record in parsed.code.imports:
+            targets = _resolve_import(
+                entry.path, record.module, record.names, record.level, known_paths
+            )
+            if not targets:
+                skipped_external += 1
+                continue
+            for target_path in sorted(targets):
+                key = (entry.commit_sha, entry.path, target_path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                locator = f"{entry.path}:{record.line}"
+                relationships.append(
+                    RelationshipWrite(
+                        edge_id=stable_id(
+                            "edge", ids.repository_id, IMPORTS, entry.path, target_path
+                        ),
+                        edge_type=IMPORTS,
+                        source=source_id,
+                        target=ids.file(target_path),
+                        properties={"line": record.line, "kind": record.kind},
+                        valid_from=committed_at,
+                        origin="git",
+                        origin_id=f"{entry.path}:{target_path}",
+                        event_id=stable_id(
+                            "graph-write", ids.repository_id, "git-imports",
+                            entry.path, target_path, str(record.line),
+                        ),
+                        run_id=run_id,
+                        info_horizon=committed_at,
+                        evidence_ids=(
+                            ids.evidence(
+                                "git", entry.commit_sha,
+                                source_urls.get(
+                                    (entry.commit_sha, entry.path), entry.path
+                                ),
+                            ),
+                        ),
+                    )
+                )
+    skipped: tuple[str, ...] = ()
+    if skipped_external:
+        skipped = (
+            f"imports-external-or-unresolved:{skipped_external} "
+            "(third-party, stdlib, or missing files; no targets invented)",
+        )
+    return MappedGraph(relationships=tuple(relationships), skipped=skipped)
 
 
 # ---------------------------------------------------------------------------
@@ -1038,7 +1202,7 @@ class GraphSink(GraphSinkProtocol):
         self._ensure_ready()
         if edge_types is None:
             edge_types = (
-                ABOUT, PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, HAS_LABEL,
+                ABOUT, PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, IMPORTS, HAS_LABEL,
                 CHILD_OF, TIP_OF, MERGED_AS, "MENTIONS", "INTENDS_TO_RESOLVE",
                 "CLOSED_BY", "RELATED_TO",
             )

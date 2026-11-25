@@ -564,13 +564,14 @@ def test_map_imports_resolves_absolute_relative_and_package_imports():
     mapped = map_imports(content, index, ids(), run_id=RUN_ID)
 
     targets = {(edge.source, edge.target) for edge in mapped.relationships}
-    assert (ids().file("models/gcn.py"), ids().file("models/graphnet.py")) in targets
-    assert (ids().file("tests/t.py"), ids().file("tf_gnns/models/gcn.py")) in targets
-    assert (ids().file("tests/t.py"), ids().file("tf_gnns/__init__.py")) in targets
-    assert (ids().file("models/__init__.py"), ids().file("models/gcn.py")) in targets
-    # Third-party and stdlib imports are reported, never invented.
-    assert any("imports-external" in gap for gap in mapped.skipped)
-    assert all(edge.edge_type == IMPORTS for edge in mapped.relationships)
+    assert (ids().file("models/gcn.py"), ids().module("models/graphnet.py")) in targets
+    assert (ids().file("tests/t.py"), ids().module("tf_gnns/models/gcn.py")) in targets
+    assert (ids().file("tests/t.py"), ids().module("tf_gnns/__init__.py")) in targets
+    assert (ids().file("models/__init__.py"), ids().module("models/gcn.py")) in targets
+    libraries = {e.properties["name"]: e for e in mapped.entities if e.labels == ("ExternalLibrary",)}
+    assert set(libraries) == {"torch", "os", "sys"}
+    assert libraries["os"].properties["dependency_kind"] == "stdlib"
+    assert (ids().module("models/gcn.py"), ids().library("torch")) in targets
     # Same import seen twice maps once per commit.
     assert len({edge.edge_id for edge in mapped.relationships}) == len(mapped.relationships)
 

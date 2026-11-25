@@ -42,10 +42,12 @@ from .protocols import GraphSink as GraphSinkProtocol
 
 __all__ = [
     "ABOUT",
+    "AFFECTS",
     "BELONGS_TO",
     "CHANGES",
     "CHILD_OF",
     "DEFINED_AT",
+    "DEPENDS_ON",
     "HAS_BRANCH",
     "HAS_FOLDER",
     "HAS_LABEL",
@@ -54,6 +56,7 @@ __all__ = [
     "MERGED_AS",
     "OF_FILE",
     "PARENT_COMMIT",
+    "PROVIDED_BY",
     "TIP_OF",
     "TOUCHES",
     "EntityWrite",
@@ -68,6 +71,7 @@ __all__ = [
     "VersionRecord",
     "WriteReport",
     "map_classes",
+    "map_code_components",
     "map_diffs",
     "map_discovery",
     "map_folders",
@@ -81,8 +85,11 @@ __all__ = [
 # Edge types used by typed traversal.  The driver reads the edge type from
 # the ``type`` property, so the sink always sets it.
 ABOUT = "ABOUT"
+AFFECTS = "AFFECTS"
 BELONGS_TO = "BELONGS_TO"
 DEFINED_AT = "DEFINED_AT"
+DEPENDS_ON = "DEPENDS_ON"
+PROVIDED_BY = "PROVIDED_BY"
 PARENT_COMMIT = "PARENT_COMMIT"
 MEMBER_OF = "MEMBER_OF"
 OF_FILE = "OF_FILE"
@@ -100,7 +107,7 @@ MERGED_AS = "MERGED_AS"
 #: writes with ``properties["hierarchical"] = True``; the visualizer pulls
 #: them harder than associative edges (configurably).
 HIERARCHICAL_EDGE_TYPES = frozenset(
-    {PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, CHANGES, TIP_OF, CHILD_OF, BELONGS_TO, HAS_BRANCH, HAS_FOLDER}
+    {PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, CHANGES, TIP_OF, CHILD_OF, BELONGS_TO, HAS_BRANCH, HAS_FOLDER, DEFINED_AT}
 )
 
 NODE_INDEXES = ("sha", "path", "number", "name", "prov_run_id")
@@ -322,6 +329,10 @@ def map_git_index(
         previous = first_seen.get(entry.path)
         if previous is None or committed_at < previous:
             first_seen[entry.path] = committed_at
+    for change in index.changes:
+        committed_at = commit_times.get(change.commit_sha)
+        if committed_at is not None:
+            first_seen[change.path] = min(first_seen.get(change.path, committed_at), committed_at)
     for path, valid_from in sorted(first_seen.items()):
         file_id = ids.file(path)
         entities.append(
@@ -649,239 +660,38 @@ def map_topic_assignments(
     )
 
 
-def _resolve_import(
-    importing_path: str, module: str | None, names: Sequence[str], level: int,
-    known_paths: set[str],
-) -> set[str]:
-    """Resolve an import record to repository-relative file paths.
-
-    Absolute imports resolve from the repository root; relative imports
-    resolve against the importing file's package (``level`` dots climb out).
-    Only ``.py`` files and packages (``__init__.py``) present in
-    ``known_paths`` resolve; third-party and stdlib imports do not.
-    """
-
-    from .content import module_name
-
-    resolved: set[str] = set()
-
-    def candidates(dotted: str) -> list[str]:
-        stem = dotted.replace(".", "/")
-        return [f"{stem}.py", f"{stem}/__init__.py"]
-
-    if level == 0:
-        targets = [module] if module else []
-        targets.extend(f"{module}.{name}" for name in names if module and name != "*")
-        targets.extend(name for name in names if not module and name != "*")
-        for dotted in targets:
-            for candidate in candidates(dotted):
-                if candidate in known_paths:
-                    resolved.add(candidate)
-        return resolved
-
-    package = module_name(importing_path)
-    if package is None:
-        return resolved
-    if importing_path.replace("\\", "/").endswith("__init__.py"):
-        package_parts: list[str] = package.split(".")
-    else:
-        package_parts = package.split(".")[:-1]
-    climb = level - 1
-    if climb > len(package_parts):
-        return resolved  # relative import beyond the top-level package
-    base = package_parts[: len(package_parts) - climb] if climb else package_parts
-
-    def qualify(name: str | None) -> str | None:
-        if name is None:
-            return ".".join(base) if base else None
-        return ".".join([*base, name]) if base else name
-
-    targets = [qualify(module)]
-    targets.extend(qualify(name) for name in names if name != "*")
-    for dotted in targets:
-        if not dotted:
-            continue
-        for candidate in candidates(dotted):
-            if candidate in known_paths:
-                resolved.add(candidate)
-    return resolved
-
-
 def map_imports(
     content: ContentIndex, index: GitIndex, ids: IdFactory, *, run_id: str
 ) -> MappedGraph:
-    """Map resolved intra-repository Python imports to ``IMPORTS`` edges.
+    """Compatibility shim for the dependency projection; see code_graph."""
+    from .code_graph import map_imports as project_imports
 
-    One edge per (importing file, imported file) pair per commit; external
-    and unresolvable imports are summarized once in ``skipped`` instead of
-    inventing targets.  Edge IDs omit the commit so re-observation across
-    commits becomes versions of one edge rather than duplicates.
-    """
-
-    relationships: list[RelationshipWrite] = []
-    skipped_external = 0
-    commit_times = {
-        record.sha: record.committed_at
-        for record in (*index.selection.selected_commits, *index.selection.boundary_commits)
-    }
-    known_paths = {entry.path for entry in index.snapshots}
-    source_urls = {
-        (entry.commit_sha, entry.path): entry.source_url
-        for entry in index.snapshots
-    }
-    seen: set[tuple[str, str, str]] = set()
-
-    for entry in index.snapshots:
-        committed_at = commit_times.get(entry.commit_sha)
-        if committed_at is None:
-            continue
-        parsed = content.content_for(entry.snapshot_id)
-        if (
-            parsed is None
-            or parsed.status != "parsed"
-            or parsed.code is None
-        ):
-            continue
-        source_id = ids.file(entry.path)
-        for record in parsed.code.imports:
-            targets = _resolve_import(
-                entry.path, record.module, record.names, record.level, known_paths
-            )
-            if not targets:
-                skipped_external += 1
-                continue
-            for target_path in sorted(targets):
-                key = (entry.commit_sha, entry.path, target_path)
-                if key in seen:
-                    continue
-                seen.add(key)
-                locator = f"{entry.path}:{record.line}"
-                relationships.append(
-                    RelationshipWrite(
-                        edge_id=stable_id(
-                            "edge", ids.repository_id, IMPORTS, entry.path, target_path
-                        ),
-                        edge_type=IMPORTS,
-                        source=source_id,
-                        target=ids.file(target_path),
-                        properties={"line": record.line, "kind": record.kind},
-                        valid_from=committed_at,
-                        origin="git",
-                        origin_id=f"{entry.path}:{target_path}",
-                        event_id=stable_id(
-                            "graph-write", ids.repository_id, "git-imports",
-                            entry.path, target_path, str(record.line),
-                        ),
-                        run_id=run_id,
-                        info_horizon=committed_at,
-                        evidence_ids=(
-                            ids.evidence(
-                                "git", entry.commit_sha,
-                                source_urls.get(
-                                    (entry.commit_sha, entry.path), entry.path
-                                ),
-                            ),
-                        ),
-                    )
-                )
-    skipped: tuple[str, ...] = ()
-    if skipped_external:
-        skipped = (
-            f"imports-external-or-unresolved:{skipped_external} "
-            "(third-party, stdlib, or missing files; no targets invented)",
-        )
-    return MappedGraph(relationships=tuple(relationships), skipped=skipped)
+    return project_imports(content, index, ids, run_id=run_id)
 
 
 def map_classes(
     content: ContentIndex, index: GitIndex, ids: IdFactory, *, run_id: str
 ) -> MappedGraph:
-    """Map class definitions to ``Class`` entities plus ``DEFINED_AT`` edges.
+    """Legacy class-only projection; new callers should use map_code_components."""
+    mapped = map_code_components(content, index, ids, run_id=run_id)
+    classes = tuple(entity for entity in mapped.entities if entity.labels == ("Class",))
+    class_ids = {entity.logical_id for entity in classes}
+    return MappedGraph(
+        entities=classes,
+        relationships=tuple(
+            edge for edge in mapped.relationships
+            if edge.source in class_ids and edge.edge_type == DEFINED_AT
+        ),
+    )
 
-    Classes are the architectural units the topic model reasons about; only
-    ``class`` symbols become entities (functions and methods stay out of the
-    graph by design, and would ride the same code path).  Edge IDs omit the
-    commit so re-observation across commits becomes versions of one edge.
-    """
 
-    entities: list[EntityWrite] = []
-    relationships: list[RelationshipWrite] = []
-    commit_times = {
-        record.sha: record.committed_at
-        for record in (*index.selection.selected_commits, *index.selection.boundary_commits)
-    }
-    seen_entities: set[str] = set()
-    seen_edges: set[tuple[str, str, str]] = set()
-    for entry in index.snapshots:
-        committed_at = commit_times.get(entry.commit_sha)
-        if committed_at is None:
-            continue
-        parsed = content.content_for(entry.snapshot_id)
-        if parsed is None or parsed.status != "parsed" or parsed.code is None:
-            continue
-        for symbol in parsed.code.symbols:
-            if symbol.kind != "class":
-                continue
-            class_id = stable_id("class", ids.repository_id, entry.path, symbol.qualname)
-            if (class_id, committed_at) not in seen_entities:
-                seen_entities.add((class_id, committed_at))
-                entities.append(
-                    EntityWrite(
-                        logical_id=class_id,
-                        labels=("Class",),
-                        properties={
-                            "name": symbol.name,
-                            "qualname": symbol.qualname,
-                            "path": entry.path,
-                            "line": symbol.line,
-                        },
-                        valid_from=committed_at,
-                        origin="git",
-                        origin_id=f"{entry.path}:{symbol.qualname}",
-                        event_id=stable_id(
-                            "graph-write", ids.repository_id, "git-class",
-                            entry.path, symbol.qualname,
-                        ),
-                        run_id=run_id,
-                        info_horizon=committed_at,
-                        evidence_ids=(
-                            ids.evidence(
-                                "git", entry.commit_sha,
-                                f"{entry.source_url}#L{symbol.line}",
-                            ),
-                        ),
-                    )
-                )
-            key = (entry.commit_sha, entry.path, symbol.qualname)
-            if key in seen_edges:
-                continue
-            seen_edges.add(key)
-            relationships.append(
-                RelationshipWrite(
-                    edge_id=stable_id(
-                        "edge", ids.repository_id, DEFINED_AT, entry.path, symbol.qualname
-                    ),
-                    edge_type=DEFINED_AT,
-                    source=class_id,
-                    target=ids.file(entry.path),
-                    properties={"line": symbol.line, "qualname": symbol.qualname},
-                    valid_from=committed_at,
-                    origin="git",
-                    origin_id=f"{entry.path}:{symbol.qualname}",
-                    event_id=stable_id(
-                        "graph-write", ids.repository_id, "git-defined-at",
-                        entry.path, symbol.qualname,
-                    ),
-                    run_id=run_id,
-                    info_horizon=committed_at,
-                    evidence_ids=(
-                        ids.evidence(
-                            "git", entry.commit_sha, f"{entry.source_url}#L{symbol.line}"
-                        ),
-                    ),
-                )
-            )
-    return MappedGraph(entities=tuple(entities), relationships=tuple(relationships))
+def map_code_components(
+    content: ContentIndex, index: GitIndex, ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Project the common source IR without coupling parsers to the sink."""
+    from .code_graph import map_code_components as project_components
+
+    return project_components(content, index, ids, run_id=run_id)
 
 
 def map_folders(
@@ -1014,8 +824,11 @@ def map_diffs(
     the changing commit.  Unchanged snapshot entries never produce Diffs.
     Commits reach files only through diffs: ``TOUCHES`` edges run commit to
     diff, and ``CHANGES`` edges run diff to file.  Both are hierarchical;
-    nothing here is invented.
+    nothing here is invented. ``AFFECTS`` also reaches the observed local
+    modules backed by changed Python files, independently of symbol edits.
     """
+
+    from .code_graph import change_details, module_change_targets
 
     entities: list[EntityWrite] = []
     relationships: list[RelationshipWrite] = []
@@ -1041,6 +854,7 @@ def map_diffs(
         snapshot_id = snapshot_ids_by_key.get((change.commit_sha, change.path))
         parsed = content.content_for(snapshot_id) if snapshot_id else None
         preview = _preview_text(parsed.text if parsed is not None else None)
+        details, affected = change_details(change, content)
         entities.append(
             EntityWrite(
                 logical_id=diff_id,
@@ -1055,6 +869,7 @@ def map_diffs(
                     "is_binary": change.is_binary,
                     "preview": preview,
                     "source_url": change.source_url,
+                    **details,
                 },
                 valid_from=committed_at,
                 origin="git",
@@ -1068,6 +883,34 @@ def map_diffs(
                 evidence_ids=(ids.evidence("git", change.commit_sha, change.source_url),),
             )
         )
+        for (kind, qualname), status in affected:
+            path = (change.old_path or change.path) if status == "deleted" else change.path
+            target = ids.symbol(path, kind, qualname)
+            relationships.append(RelationshipWrite(
+                edge_id=stable_id("edge", ids.repository_id, AFFECTS, diff_id, target),
+                edge_type=AFFECTS, source=diff_id, target=target,
+                properties={"status": status, "basis": "before-after-source-comparison"},
+                valid_from=committed_at, origin="git",
+                origin_id=f"{change.commit_sha}:{change.path}:{qualname}:affects",
+                event_id=stable_id("graph-write", ids.repository_id, diff_id, target),
+                run_id=run_id, info_horizon=committed_at,
+                evidence_ids=(ids.evidence("git", change.commit_sha, change.source_url),),
+            ))
+        for path, sides in module_change_targets(change, content).items():
+            target = ids.module(path)
+            relationships.append(RelationshipWrite(
+                edge_id=stable_id("edge", ids.repository_id, AFFECTS, diff_id, target),
+                edge_type=AFFECTS, source=diff_id, target=target,
+                properties={
+                    "status": change.status, "basis": "file-change",
+                    "path": path, "change_sides": sides,
+                },
+                valid_from=committed_at, origin="git",
+                origin_id=f"{change.commit_sha}:{path}:module-affects",
+                event_id=stable_id("graph-write", ids.repository_id, diff_id, target),
+                run_id=run_id, info_horizon=committed_at,
+                evidence_ids=(ids.evidence("git", change.commit_sha, change.source_url),),
+            ))
         for edge_type, source, target, kind in (
             (TOUCHES, ids.commit(change.commit_sha), diff_id, "touches"),
             (CHANGES, diff_id, ids.file(change.path), "changes"),
@@ -1310,6 +1153,7 @@ class GraphSink(GraphSinkProtocol):
         except TemporalVersionError as exc:
             if "already exists" not in str(exc):
                 raise
+            self._ensure_ready()
             existing = self._db.get_node_version(version_id)
             if existing is None or dict(existing.node.properties) != properties:
                 raise GraphError(
@@ -1343,6 +1187,7 @@ class GraphSink(GraphSinkProtocol):
         except TemporalVersionError as exc:
             if "already exists" not in str(exc):
                 raise
+            self._ensure_ready()
             existing = self._db.get_edge_version(version_id)
             if existing is None or dict(existing.edge.properties) != properties:
                 raise GraphError(
@@ -1515,7 +1360,8 @@ class GraphSink(GraphSinkProtocol):
         if labels is None:
             labels = (
                 "Commit", "File", "Snapshot", "WorkItem", "ProviderLabel", "Branch",
-                "Topic", "Folder", "Class", "Repository", "Diff",
+                "Topic", "Folder", "Class", "Repository", "Diff", "Module",
+                "Function", "Method", "Field", "ExternalLibrary",
             )
         return {label: self._db.count_nodes_by_label(label) for label in labels}
 
@@ -1529,6 +1375,7 @@ class GraphSink(GraphSinkProtocol):
                 ABOUT, DEFINED_AT, PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, IMPORTS,
                 BELONGS_TO, HAS_BRANCH, HAS_FOLDER, HAS_LABEL, CHILD_OF, TIP_OF, MERGED_AS, CHANGES,
                 "MENTIONS", "INTENDS_TO_RESOLVE", "CLOSED_BY", "RELATED_TO",
+                AFFECTS, DEPENDS_ON, PROVIDED_BY,
             )
         return {edge_type: self._db.count_edges_by_type(edge_type) for edge_type in edge_types}
 

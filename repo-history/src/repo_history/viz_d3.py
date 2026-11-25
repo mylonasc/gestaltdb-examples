@@ -19,8 +19,8 @@ from typing import Any, Sequence
 from .content import ContentIndex, detect_language
 from .git import GitIndex
 from .github import GitHubDiscovery
-from .graph import HIERARCHICAL_EDGE_TYPES, EntityWrite, RelationshipWrite
-from .ids import IdFactory, stable_id
+from .graph import HIERARCHICAL_EDGE_TYPES, EntityWrite, RelationshipWrite, map_diffs
+from .ids import IdFactory
 from .labeling import TopicAssignment
 from .linking import LinkRecord, LinkRelation
 from .models import ensure_utc
@@ -70,6 +70,10 @@ def build_viewer_data(
     """
 
     ids = IdFactory(repository_url)
+    # Use the persisted graph's mapper, not a second implementation of diffs.
+    diffs = map_diffs(content, index, ids, run_id=run_id)
+    extra_nodes = (*extra_nodes, *diffs.entities)
+    extra_edges = (*extra_edges, *diffs.relationships)
     nodes: dict[str, dict[str, Any]] = {}
     times: dict[str, datetime] = {}
 
@@ -178,10 +182,23 @@ def build_viewer_data(
                 link.model_copy(update={"source_id": source, "target_id": target})
             )
     links = aggregated
+    direct_parents = {
+        (ids.commit(c.sha), ids.commit(parent))
+        for c in (*index.selection.selected_commits, *index.selection.boundary_commits)
+        for parent in c.parents
+    }
+    change_edges = {
+        (r.source, r.target, r.edge_type)
+        for r in diffs.relationships if r.edge_type in {"TOUCHES", "CHANGES"}
+    }
     extra: list[dict[str, Any]] = []
     for write in extra_edges:
         source = canonical_endpoint(write.source)
         target = canonical_endpoint(write.target)
+        if write.edge_type == "PARENT_COMMIT" and (source, target) not in direct_parents:
+            continue
+        if write.edge_type in {"TOUCHES", "CHANGES"} and (source, target, write.edge_type) not in change_edges:
+            continue
         hierarchical = bool(write.properties.get("hierarchical", False))
         if not hierarchical and write.edge_type in HIERARCHICAL_EDGE_TYPES:
             hierarchical = True
@@ -193,69 +210,7 @@ def build_viewer_data(
             "inferred": write.edge_type == "RELATED_TO" and write.origin == "linking",
             "rationale": str(write.properties.get("rationale", write.edge_type)),
             "evidence": len(write.evidence_ids),
-        })
-    # Diffs are the hinge of the model: only commits with an actual change
-    # record touch a file, via commit -> Diff (TOUCHES) and Diff -> file
-    # (CHANGES).  Unchanged snapshot entries never produce edges, so a
-    # commit that merely carries a file forward does not touch it.
-    seen_diffs: set[str] = set()
-    for change in sorted(index.changes, key=lambda item: (item.commit_sha, item.path)):
-        moment = commit_times.get(change.commit_sha)
-        if moment is None:
-            continue
-        diff_id = stable_id("diff", ids.repository_id, change.commit_sha, change.path)
-        if diff_id in nodes or diff_id in seen_diffs:
-            pass
-        else:
-            seen_diffs.add(diff_id)
-            preview = ""
-            snap_id = next(
-                (
-                    snap.snapshot_id
-                    for snap in content.snapshots
-                    if snap.commit_sha == change.commit_sha and snap.path == change.path
-                ),
-                None,
-            )
-            parsed = content.content_for(snap_id) if snap_id else None
-            if parsed is not None and parsed.text:
-                preview = "\n".join(parsed.text.splitlines()[:30])[:1500]
-            short_path = change.path.rsplit("/", 1)[-1]
-            add(
-                diff_id, "Diff", f"{short_path}@{change.commit_sha[:8]}"[-34:],
-                title=f"{change.path} @ {change.commit_sha[:8]} [{change.status}]",
-                time=_iso(moment),
-                props={
-                    "commit_sha": change.commit_sha,
-                    "path": change.path,
-                    "old_path": change.old_path,
-                    "status": change.status,
-                    "old_oid": change.old_oid,
-                    "new_oid": change.new_oid,
-                    "definition_url": change.source_url,
-                    "preview": preview,
-                },
-                prov={"method": "git-changes", "run_id": run_id,
-                      "horizon": info_horizon.isoformat()},
-            )
-            times[diff_id] = moment
-        extra.append({
-            "source": canonical_endpoint(ids.commit(change.commit_sha)),
-            "target": diff_id,
-            "relation": "TOUCHES",
-            "hierarchical": True,
-            "inferred": False,
-            "rationale": f"commit touches diff [{change.status}]",
-            "evidence": 0,
-        })
-        extra.append({
-            "source": diff_id,
-            "target": canonical_endpoint(ids.file(change.path)),
-            "relation": "CHANGES",
-            "hierarchical": True,
-            "inferred": False,
-            "rationale": f"diff changes file [{change.status}]",
-            "evidence": 0,
+            "props": dict(write.properties),
         })
 
     path_of_id: dict[str, str] = {
@@ -302,6 +257,7 @@ def build_viewer_data(
         language = detect_language(path)
         history = sorted(set(changes_by_path.get(path, [])))
         preview = ""
+        full_text = None
         candidates = [
             entry for entry in index.snapshots if entry.path == path
         ] or [snap for snap in content.snapshots if snap.path == path]
@@ -315,8 +271,10 @@ def build_viewer_data(
             snapshot_id = getattr(latest, "snapshot_id", None)
             parsed = content.content_for(snapshot_id) if snapshot_id else None
             if parsed is not None and parsed.text:
+                full_text = parsed.text
                 preview = "\n".join(parsed.text.splitlines()[:30])[:1500]
         basename = path.rsplit("/", 1)[-1]
+        language = detect_language(path, full_text)
         add(
             file_id, "File", basename[-34:], title=path, time=_iso(first_seen),
             language=language,
@@ -329,6 +287,7 @@ def build_viewer_data(
                     for moment, sha, status in history
                 ],
                 "preview": preview,
+                "text": full_text,
             },
             prov={"method": "linking", "run_id": run_id,
                   "horizon": info_horizon.isoformat()},
@@ -364,7 +323,12 @@ def build_viewer_data(
         parts = snapshot.path.split("/")[:-1]
         for depth in range(1, len(parts) + 1):
             folder_moments.setdefault("/".join(parts[:depth]), []).append(moment)
-    for write in extra_nodes:
+    # Temporal writes must project their newest version, not whichever
+    # version happened to occur first in a mapper's output.
+    latest_nodes = {}
+    for write in sorted(extra_nodes, key=lambda w: (w.valid_from, w.event_id)):
+        latest_nodes[write.logical_id] = write
+    for write in latest_nodes.values():
         if write.logical_id in nodes:
             continue
         kind = write.labels[0] if write.labels else "Unknown"
@@ -378,7 +342,7 @@ def build_viewer_data(
             moment = write.valid_from
         if moment is not None:
             times[write.logical_id] = moment
-        if kind == "Class":
+        if kind in {"Class", "Function", "Method", "Field", "Module", "ExternalLibrary"}:
             label = str(write.properties.get("name", write.logical_id))
             title = str(write.properties.get("qualname", label))
         elif kind == "Diff":
@@ -390,9 +354,21 @@ def build_viewer_data(
         else:
             label = str(write.properties.get("path", write.properties.get("name", write.logical_id)))
             title = label
+        properties = dict(write.properties)
+        if kind in {"Module", "Class", "Function", "Method", "Field"} and properties.get("path"):
+            parsed = content.content_at(properties.get("commit_sha"), properties["path"])
+            if parsed and parsed.text is not None:
+                if kind == "Module":
+                    properties["text"] = parsed.text
+                else:
+                    lines = parsed.text.splitlines(keepends=True)
+                    properties["text"] = "\n".join(
+                        "".join(lines[loc["line"] - 1:loc["end_line"]])
+                        for loc in properties.get("locations", [])
+                    )
         add(
             write.logical_id, kind, label[-34:], title=title, time=_iso(moment),
-            props=dict(write.properties),
+            props=properties,
             prov={"method": write.origin, "run_id": run_id,
                   "horizon": info_horizon.isoformat()},
         )
@@ -457,6 +433,9 @@ def build_viewer_data(
     edges.extend(
         edge for edge in extra if edge["source"] in kept and edge["target"] in kept
     )
+    edges = list({
+        (edge["source"], edge["target"], edge["relation"]): edge for edge in edges
+    }.values())
     repository_bits = repository_url.rstrip("/").split("/")
     repository_name = (
         "/".join(repository_bits[-2:]) if len(repository_bits) >= 2 else repository_url
@@ -541,14 +520,15 @@ button { margin: 2px; }
 <script>
 const DATA = __DATA__;
 (function () {
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   if (!window.d3) {
     document.getElementById('graph').style.display = 'none';
     const fb = document.getElementById('fallback');
     fb.style.display = 'block';
     let html = '<p>D3 failed to load (offline?). Raw embedded data:</p><h3>Nodes</h3><table><tr><th>id</th><th>kind</th><th>label</th><th>t</th></tr>';
-    for (const n of DATA.nodes.slice(0, 200)) html += '<tr><td>' + n.id + '</td><td>' + n.kind + '</td><td>' + n.label + '</td><td>' + n.t + '</td></tr>';
+    for (const n of DATA.nodes.slice(0, 200)) html += '<tr><td>' + esc(n.id) + '</td><td>' + esc(n.kind) + '</td><td>' + esc(n.label) + '</td><td>' + esc(n.t) + '</td></tr>';
     html += '</table><h3>Edges</h3><table><tr><th>source</th><th>relation</th><th>target</th></tr>';
-    for (const e of DATA.edges.slice(0, 200)) html += '<tr><td>' + e.source + '</td><td>' + e.relation + '</td><td>' + e.target + '</td></tr>';
+    for (const e of DATA.edges.slice(0, 200)) html += '<tr><td>' + esc(e.source) + '</td><td>' + esc(e.relation) + '</td><td>' + esc(e.target) + '</td></tr>';
     html += '</table>';
     fb.innerHTML = html;
     return;
@@ -567,7 +547,7 @@ const DATA = __DATA__;
   // --- temporal forces: anchor pulls every x to mid-time center; ---
   // --- spread pulls left/right with strength growing from mid-time. ---
   const P = { anchor: 0.06, base: 0.015, far: 0.14, gamma: 1.0, link: 0.25, hierMult: 1.6, rank: 0.12 };
-  const TIERS = { Repository: 0, Branch: 1, WorkItem: 2, Commit: 3, Topic: 4, Diff: 5, Folder: 6, File: 7, Class: 8 };
+  const TIERS = { Repository: 0, Branch: 1, WorkItem: 2, Commit: 3, Topic: 4, Diff: 5, Folder: 6, File: 7, ExternalLibrary: 7, Module: 8, Class: 9, Function: 9, Method: 10, Field: 11 };
   function temporalForce() {
     let nodes = [];
     function force(alpha) {
@@ -601,8 +581,8 @@ const DATA = __DATA__;
   });
 
   const link = g.append('g').selectAll('line').data(DATA.edges).join('line')
-    .attr('stroke', e => e.inferred ? '#9e6a03' : (['PARENT_COMMIT', 'MEMBER_OF', 'OF_FILE', 'TIP_OF', 'TOUCHES', 'CHANGES', 'BELONGS_TO', 'HAS_BRANCH', 'HAS_FOLDER', 'DEFINED_AT', 'CHILD_OF'].includes(e.relation) ? '#8b949e' : '#1f6feb'))
-    .attr('stroke-width', e => ['PARENT_COMMIT', 'TIP_OF', 'TOUCHES', 'CHANGES', 'BELONGS_TO'].includes(e.relation) ? 1 : 2)
+    .attr('stroke', e => e.inferred ? '#9e6a03' : (e.hierarchical ? '#8b949e' : '#1f6feb'))
+    .attr('stroke-width', e => e.hierarchical ? 1 : 2)
     .attr('stroke-dasharray', e => e.inferred ? '5,3' : null);
   link.append('title').text(e => e.relation + (e.rationale ? ': ' + e.rationale : ''));
   const node = g.append('g').selectAll('g').data(DATA.nodes).join('g')
@@ -655,8 +635,8 @@ const DATA = __DATA__;
     sim.alpha(0.5).restart();
   }
 
-  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const idOf = x => (x && x.id) || x;
+  const nodesById = new Map(DATA.nodes.map(n => [n.id, n]));
 
   function select(d) {
     if (!d) {
@@ -669,13 +649,21 @@ const DATA = __DATA__;
       if (idOf(e.source) === d.id) near.add(idOf(e.target));
       if (idOf(e.target) === d.id) near.add(idOf(e.source));
     });
+    // Keep the actual changed files/symbols visible when focusing a commit,
+    // without adding transitive edges to the indexed graph.
+    const diffs = new Set(DATA.edges.filter(e => e.relation === 'TOUCHES' && idOf(e.source) === d.id).map(e => idOf(e.target)));
+    DATA.edges.forEach(e => {
+      if (diffs.has(idOf(e.source)) && ['CHANGES', 'AFFECTS'].includes(e.relation)) near.add(idOf(e.target));
+    });
     node.style('opacity', n => near.has(n.id) ? 1 : 0.12);
-    link.style('opacity', e => (idOf(e.source) === d.id || idOf(e.target) === d.id) ? 1 : 0.08);
+    link.style('opacity', e => (idOf(e.source) === d.id || idOf(e.target) === d.id || diffs.has(idOf(e.source))) ? 1 : 0.08);
     const nbrs = DATA.edges.filter(e => idOf(e.source) === d.id || idOf(e.target) === d.id)
       .map(e => {
         const other = idOf(e.source) === d.id ? e.target : e.source;
         const arrow = idOf(e.source) === d.id ? '→' : '←';
-        return `<div>${arrow} <b>${esc(e.relation)}</b> ${esc(idOf(other))}${e.inferred ? ' (inferred)' : ''}</div>`;
+        const n = nodesById.get(idOf(other));
+        const status = e.props && e.props.status ? ` (${esc(e.props.status)})` : '';
+        return `<div>${arrow} <b>${esc(e.relation)}</b> <a href="#" data-node-id="${esc(idOf(other))}">${esc(n ? n.label : idOf(other))}</a>${status}${e.inferred ? ' (inferred)' : ''}</div>`;
       }).join('');
     let extra = '';
     if (d.props) {
@@ -686,7 +674,11 @@ const DATA = __DATA__;
       if (d.props.line) extra += `line: ${d.props.line}<br>`;
       if (d.props.relation) extra += `relation: ${esc(d.props.relation)}<br>`;
       if (d.props.status) extra += `status: ${esc(d.props.status)}<br>`;
-      if (d.props.preview) extra += `<br><b>preview</b><pre style="white-space:pre-wrap;font-size:11px;max-height:220px;overflow:auto">${esc(d.props.preview)}</pre>`;
+      if (d.props.old_path) extra += `previous path: <code>${esc(d.props.old_path)}</code><br>`;
+      if (d.props.dependency_kind) extra += `dependency: ${esc(d.props.dependency_kind)} (${esc(d.props.identity_basis)})<br>`;
+      if (d.props.patch_status) extra += `patch: ${esc(d.props.patch_status)}${d.props.patch_truncated ? ' (truncated)' : ''}<br>`;
+      const sourceText = d.props.text == null ? d.props.preview : d.props.text;
+      if (sourceText) extra += `<br><b>${d.kind === 'Diff' ? 'patch' : 'source text'}</b><pre style="white-space:pre-wrap;font-size:11px;max-height:350px;overflow:auto">${esc(sourceText)}</pre>`;
       if (Array.isArray(d.props.history) && d.props.history.length) {
         extra += '<br><b>change history</b><br>' + d.props.history.slice(0, 20).map(h =>
           `<div>${esc(h.at.slice(0, 10))} · <code>${esc(h.commit.slice(0, 8))}</code> · ${esc(h.status)}</div>`
@@ -701,6 +693,10 @@ const DATA = __DATA__;
   }
 
   // controls
+  document.getElementById('details').onclick = ev => {
+    const target = ev.target.closest('[data-node-id]');
+    if (target) { ev.preventDefault(); select(nodesById.get(target.dataset.nodeId)); }
+  };
   if (DATA.meta && DATA.meta.repository && DATA.meta.repository.url) {
     document.getElementById('repolink').innerHTML =
       `repository: <a href="${esc(DATA.meta.repository.url)}" target="_blank" rel="noopener">${esc(DATA.meta.repository.name)}</a>`;

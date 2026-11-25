@@ -387,7 +387,7 @@ def test_extra_edges_join_kept_nodes_with_factual_default():
     arguments = fixture_inputs()
     arguments["extra_edges"] = [
         writes_edge(ids().commit(MID), ids().commit(ROOT), "PARENT_COMMIT"),
-        writes_edge(ids().commit(TIP), ids().file("docs/guide.md"), "TOUCHES"),
+        writes_edge(ids().commit(TIP), ids().file("docs/guide.md"), "MENTIONS"),
         writes_edge(
             ids().work_item("github", 10), ids().topic("sparse"), "ABOUT",
             origin="labeling",
@@ -398,7 +398,7 @@ def test_extra_edges_join_kept_nodes_with_factual_default():
 
     by_pair = {(edge["source"], edge["target"]): edge for edge in data["edges"]}
     assert by_pair[(ids().commit(MID), ids().commit(ROOT))]["relation"] == "PARENT_COMMIT"
-    assert by_pair[(ids().commit(TIP), ids().file("docs/guide.md"))]["relation"] == "TOUCHES"
+    assert by_pair[(ids().commit(TIP), ids().file("docs/guide.md"))]["relation"] == "MENTIONS"
     pair = by_pair[(ids().work_item("github", 10), ids().topic("sparse"))]
     assert pair["relation"] == "ABOUT"
     # The snapshot-subject ABOUT aggregates to the same file edge.

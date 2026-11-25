@@ -50,6 +50,18 @@ class IdFactory:
     def file(self, path: str) -> str:
         return stable_id("file", self.repository_id, path)
 
+    def module(self, path: str) -> str:
+        return stable_id("module", self.repository_id, path)
+
+    def symbol(self, path: str, kind: str, qualname: str) -> str:
+        return stable_id(kind.removeprefix("async-"), self.repository_id, path, qualname)
+
+    def external_module(self, name: str) -> str:
+        return stable_id("external-module", self.repository_id, "python", name)
+
+    def library(self, import_root: str) -> str:
+        return stable_id("library", self.repository_id, "python", import_root)
+
     def snapshot(self, commit_sha: str, path: str) -> str:
         return stable_id("snap", self.repository_id, commit_sha.lower(), path)
 

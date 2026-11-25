@@ -21,8 +21,7 @@ from repo_history.graph import (
     CHILD_OF,
     PARENT_COMMIT,
     TIP_OF,
-    map_classes,
-    map_diffs,
+    map_code_components,
     map_discovery,
     map_folders,
     map_git_index,
@@ -76,20 +75,14 @@ def main() -> None:
 
     history = GitHistory.open("/tmp/opencode/tf_gnns-rh03", repository_url=repo_url)
     try:
-        anchor_ids = {
-            s.snapshot_id for s in index.snapshots
-            if s.commit_sha == config.repository.anchor
-        }
-        subset = index.model_copy(update={"snapshots": tuple(
-            s for s in index.snapshots if s.snapshot_id in anchor_ids)})
-        content = ContentExtractor.from_history(history).extract(subset)
+        content = ContentExtractor.from_history(history, settings=config.content).extract(index)
     finally:
         history.close()
 
     labeler = DeterministicLabeler(config.labeling)
     # Seed prevalent aspects first: repository layout plus commit types.
     # Per-subject proposals below can only register when shared.
-    all_paths = sorted({snapshot.path for snapshot in content.snapshots})
+    all_paths = sorted({snapshot.path for snapshot in index.snapshots} | {change.path for change in index.changes})
     registry = seed_structural_registry(
         all_paths, at=now, created_by=RUN_ID, ids=ids
     )
@@ -103,7 +96,7 @@ def main() -> None:
         extract_snapshot_features(
             snap, content.content_for(snap.snapshot_id), subject_id=snap.snapshot_id
         )
-        for snap in content.snapshots
+        for snap in content.snapshots if snap.commit_sha == config.repository.anchor
     ]
     # Pass 1: collect proposals without registering singletons.
     proposals: dict[str, list[str]] = {}
@@ -133,7 +126,7 @@ def main() -> None:
                            run_id=RUN_ID, info_horizon=now)
         ]
     touched: dict[str, list[str]] = {}
-    for entry in index.snapshots:
+    for entry in index.changes:
         touched.setdefault(entry.commit_sha, []).append(entry.path)
     commit_assignments = []
     for record in (*selection.selected_commits, *selection.boundary_commits):
@@ -207,21 +200,21 @@ def main() -> None:
     links = [*text_report.links, *provider_report.links, *topic_report.links]
 
     folders = map_folders(
-        [snap.path for snap in content.snapshots], ids, run_id=RUN_ID,
+        all_paths, ids, run_id=RUN_ID,
         window_start=config.repository.window.start,
     )
     has_branches = map_repository_branches(
         [branch.name for branch in index.branches], ids, run_id=RUN_ID,
         window_start=config.repository.window.start,
     )
-    classes = map_classes(content, index, ids, run_id=RUN_ID)
-    diffs = map_diffs(content, index, ids, run_id=RUN_ID)
+    components = map_code_components(content, index, ids, run_id=RUN_ID)
+    imports = map_imports(content, index, ids, run_id=RUN_ID)
     data = build_viewer_data(
         index=index, discovery=discovery, content=content,
         links=[*text_report.links, *provider_report.links, *topic_report.links],
         assignments=assignments, info_horizon=now, run_id=RUN_ID,
         repository_url=repo_url,
-        max_nodes=400,
+        max_nodes=2000,
         branch_names={
             ids.branch(pull.head_ref): pull.head_ref
             for pull in discovery.pull_requests if pull.head_ref
@@ -230,21 +223,18 @@ def main() -> None:
             for pull in discovery.pull_requests if pull.base_ref
         },
         extra_edges=[
-            # TOUCHES (commit->diff) and CHANGES (diff->file) also come from
-            # build_viewer_data's change-record synthesis; map_diffs is the
-            # persisted-graph source of the same Diff layer.
+            # The viewer uses map_diffs internally, exactly once.
             *(r for r in map_git_index(index, ids, run_id=RUN_ID).relationships
               if r.edge_type in (PARENT_COMMIT, TIP_OF)),
             *(r for r in map_discovery(discovery, ids, run_id=RUN_ID).relationships
               if r.edge_type == CHILD_OF),
-            *map_imports(content, index, ids, run_id=RUN_ID).relationships,
+            *imports.relationships,
             *map_topic_assignments(assignments, ids, run_id=RUN_ID).relationships,
             *folders.relationships,
             *has_branches.relationships,
-            *classes.relationships,
-            *diffs.relationships,
+            *components.relationships,
         ],
-        extra_nodes=[*folders.entities, *classes.entities, *diffs.entities],
+        extra_nodes=[*folders.entities, *components.entities, *imports.entities],
     )
     (HERE / "graph.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
     (HERE / "viewer.html").write_text(

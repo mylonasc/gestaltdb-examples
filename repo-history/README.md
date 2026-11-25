@@ -40,6 +40,9 @@ Nothing in the pipeline mutates the target repository, opens sockets except
 through those two gates, or invents history: unavailable source history is
 reported as explicit coverage gaps.  `examples/evaluate.py` reproduces the
 bounded live evaluation; pass `--llm` only with consent and a key.
+Use `--state-root /path/to/fresh-state` when changing the graph schema so an
+old completed checkpoint cannot silently skip the new mapping. Bulk graph
+writes defer index rebuilding until the final verification reads.
 
 ## Content extraction
 
@@ -54,16 +57,36 @@ extractor = ContentExtractor.from_history(history)
 content_index = extractor.extract(index)
 ```
 
-Parsing is keyed by `(blob oid, media type)`, so identical bytes are parsed once
-while every snapshot keeps its own `snapshot_id`, commit, path, and source URL.
+Parsing identities include blob ID, media type, language, adapter version, and
+extraction policy. Identical inputs are parsed once while every snapshot keeps
+its own `snapshot_id`, commit, path, and source URL.
 Markdown headings, links, fenced code blocks, and sections carry character
 offsets and line ranges into the original blob; Python files are inspected with
-`ast` only and are never imported or executed.
+ASTs for definitions and tree-sitter for imports, never imported or executed.
+Python encoding declarations are honored. `code_models.SourceCodeParser` is a
+typed, text-to-structure adapter contract; `code_parsers` can be supplied to the
+extractor constructor or `from_history` to add language backends independently
+of Git, persistence, and the viewer.
+
+Python import syntax now uses **incremental tree-sitter parsing** when the
+file's first-parent tree is available. Extraction processes commits in causal
+order (not timestamp/SHA order), follows rename/copy paths, and edits a copy of
+the cached parent tree before passing it to tree-sitter. UTF-8 byte offsets and
+line/column edits are computed from the decoded text; separate branches never
+mutate their shared parent's tree. Trees are transient, not checkpoint data.
+Missing parent trees fall back to full parsing; identical blobs still reuse
+their cached extraction results. AST definition extraction and import-record
+traversal remain whole-document operations, so this is not a claim that every
+analysis stage is incremental. Optional `IncrementalSourceCodeParser` adapters
+extend the ordinary parser contract without requiring other adapters to change.
+The default Python adapter exposes actual tree-sitter call counts through
+`extractor.code_parsers["python"].counters`.
 
 Statuses are explicit: `parsed`, `empty`, `unsupported` (binary or Git LFS
 pointer), `oversized`, `undecodable`, `gitlink`, and `unavailable`. Each
-non-parsed status emits a `CoverageGap`, as do truncated section, symbol, and
-import lists, so configured limits stay observable in the output.
+unsupported/oversized/undecodable/unavailable status emits a `CoverageGap`, as
+do syntax errors and truncated section, symbol, and import lists. Empty files
+and Git links are recorded without inventing source content.
 
 ## GitHub work items and evidence
 
@@ -165,13 +188,27 @@ sink.close()
 `map_git_index` emits `Commit`, `Snapshot`, `File` (with detected language
 and media type), and `Branch` entities with `PARENT_COMMIT`, `MEMBER_OF`,
 and `OF_FILE` relationships plus `TIP_OF` branch links. `map_diffs` turns
-each changed file into a `Diff` entity carrying the change status and a
-bounded text preview; commits reach diffs through `TOUCHES` edges and diffs
-reach files through `CHANGES` edges, so ancestry is never invented and the
-full text stays in parsed content. `map_imports` resolves intra-repository
-Python imports (absolute, relative, and `__init__` packages; third-party
-imports are reported, never invented) into `IMPORTS` file-to-file edges;
-`map_classes` emits `Class` entities with `DEFINED_AT` edges to their files;
+each changed file into a `Diff` entity with status, a bounded unified patch,
+and comparison provenance. Commits reach diffs through `TOUCHES`; diffs reach
+files through `CHANGES` and changed definitions through `AFFECTS`.
+Diffs also explicitly `AFFECTS` their observed local Python modules, including
+import-only and top-level edits that do not change a class/function. These
+module links carry `basis: file-change`, change status, and before/after sides;
+symbol links still require before/after source differences. Deletions reach the
+previous module, renames reach both path identities, and copies reach only the
+destination. Namespace/external-module changes are not inferred transitively.
+`map_code_components` emits separate `Module`, `Class`, `Function`, `Method`,
+and `Field` entities with `DEFINED_AT` file links and immediate lexical
+`BELONGS_TO` ownership. `map_classes` remains a class-only compatibility view.
+`map_imports` resolves Python imports to module/symbol targets against the
+importing commit's tree (aliases, relative imports, source layouts, namespaces,
+and explicit re-exports). External modules link to `ExternalLibrary` nodes
+through `PROVIDED_BY`; importing local modules link through `DEPENDS_ON`.
+Libraries carry observed import-root identities, **not guessed distribution
+names or installed versions**; stdlib and third-party/unresolved roots are
+distinguished. Source extraction never imports project code.
+See [the parser review](PARSER_REVIEW.md) for architecture, regression findings,
+static-analysis limitations, and recommended next improvements.
 `map_folders` emits `Folder` entities, a single `Repository` root, and
 immediate-parent `BELONGS_TO` file→folder and folder→folder edges (plus
 `HAS_BRANCH` repo→branch edges via `map_repository_branches`). Containment
@@ -364,10 +401,12 @@ omissions reported, and the footer records run, horizon, counts, and gaps.
 and writes `examples/viewer.html`, a self-contained page (D3 loaded from
 CDN, with an offline data-table fallback) with a force-directed layout whose
 x-axis is time and whose y-axis follows the entity hierarchy
-(Repository → Branch → WorkItem → Commit → Topic → Diff → Folder → File → Class). All edge
+(Repository → Branch → WorkItem → Commit → Topic → Diff → Folder → File → Module
+→ Class/Function → Method → Field). External libraries have their own node kind. All edge
 kinds are included — `PARENT_COMMIT`, `TIP_OF`, `TOUCHES` (commit→diff),
-`CHANGES` (diff→file), `DEFINED_AT` (class→file), `IMPORTS` (intra-repo
-Python imports), `CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`,
+`CHANGES` (diff→file), `AFFECTS` (diff→module/definition), `DEFINED_AT` (component→file),
+`IMPORTS` (file→module/symbol), `DEPENDS_ON` (module→library),
+`PROVIDED_BY` (external module→library), `CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`,
 `RELATED_TO` (provider and inferred), `BELONGS_TO`, `HAS_BRANCH`, and
 `ABOUT` (topic assignments). Files connect only to the commits that actually
 change them, via the Diff layer (commit→diff→file):
@@ -383,9 +422,9 @@ change them, via the Diff layer (commit→diff→file):
 - files are colored by detected type (source vs docs vs other, toggleable
   legend) instead of a single file color; folders group files by directory
   under a single repository root; classes appear as named nodes linked to
-  their defining files. Selecting a file shows its text preview and
-  per-commit change history; selecting any node shows its provenance and
-  evidence.
+  their defining files. Selecting a file shows retained source text and
+  per-commit change history; selecting a diff shows its patch; components show
+  their source spans. Related-node links allow navigation through the graph.
 - nodes without timestamps (deleted branches, unobserved tips, the repository
   root) stay centered with no time pull; snapshot occurrences aggregate to
   file nodes and remote tracking refs resolve to PR head branches.

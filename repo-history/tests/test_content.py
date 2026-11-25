@@ -238,8 +238,9 @@ def test_python_ast_symbols_imports_and_module_features(fixture: GitFixture):
         for record in code.imports
     ] == [
         ("import", None, ("os",), 0),
-        ("from", "typing", ("Any as A", "Optional"), 0),
+        ("from", "typing", ("Any", "Optional"), 0),
     ]
+    assert code.imports[1].aliases == ("A", None)
 
 
 def test_python_syntax_errors_are_reported_without_execution(fixture: GitFixture):

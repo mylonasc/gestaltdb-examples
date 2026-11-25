@@ -1,25 +1,31 @@
 """Bounded Markdown and source-code extraction without executing content.
 
-Parsing is keyed by blob object ID and detected media type so identical content
-is read and parsed once, while every tree snapshot keeps its own provenance.
+Parsing is keyed by blob ID, media type, language, adapter version, and policy
+so identical content is read and parsed once, while snapshots keep provenance.
 Markdown sections, headings, links, and fenced code blocks carry character
-offsets into the original text. Python files are inspected with :mod:`ast`
-only; no module is imported or executed.
+offsets into the original text. Language adapters inspect source statically;
+no project module is imported or executed.
 """
 
 from __future__ import annotations
 
-import ast
 import hashlib
+import io
 import re
+import tokenize
 from bisect import bisect_right
+from functools import cached_property
+from graphlib import TopologicalSorter
 from pathlib import PurePosixPath
-from typing import Callable, Literal
+from typing import Callable, Literal, Mapping
 
 from markdown_it import MarkdownIt
 from pydantic import Field
 
 from .budgets import BudgetLedger
+from .code_models import (
+    CodeDocument, CodeSymbol, ImportRecord, IncrementalSourceCodeParser, SourceCodeParser,
+)
 from .git import GitHistory, GitIndex, TreeEntryRecord
 from .ids import IdFactory, stable_id
 from .models import (
@@ -28,6 +34,8 @@ from .models import (
     CoverageStatus,
     FrozenModel,
 )
+from .python_parser import PythonParser
+from .python_names import python_module_name
 
 ParseStatus = Literal[
     "parsed",
@@ -41,7 +49,7 @@ ParseStatus = Literal[
 MediaType = Literal["markdown", "python", "code", "text", "binary", "unknown"]
 LinkKind = Literal["link", "image"]
 
-PARSER_VERSION = "content-v1"
+PARSER_VERSION = "content-v3"
 
 EXTENSION_LANGUAGES: dict[str, str] = {
     ".md": "markdown",
@@ -169,7 +177,6 @@ SHEBANG_LANGUAGES: tuple[tuple[str, str], ...] = (
     ("perl", "perl"),
 )
 
-_MAX_DOCSTRING_CHARS = 1_000
 _MAX_SYMBOL_TEXT_CHARS = 200
 
 
@@ -221,40 +228,6 @@ class MarkdownDocument(FrozenModel):
     code_blocks: tuple[MarkdownCodeBlock, ...] = ()
     sections: tuple[MarkdownSection, ...] = ()
     sections_truncated: bool = False
-
-
-class ImportRecord(FrozenModel):
-    kind: Literal["import", "from"]
-    module: str | None
-    names: tuple[str, ...]
-    level: int = 0
-    line: int
-
-
-class CodeSymbol(FrozenModel):
-    symbol_id: str
-    kind: Literal[
-        "class", "function", "method", "async-function", "async-method"
-    ]
-    name: str
-    qualname: str
-    line: int
-    column: int
-    end_line: int
-    decorators: tuple[str, ...] = ()
-    bases: tuple[str, ...] = ()
-    docstring: str | None = None
-
-
-class CodeDocument(FrozenModel):
-    language: str
-    shebang: str | None = None
-    docstring: str | None = None
-    imports: tuple[ImportRecord, ...] = ()
-    symbols: tuple[CodeSymbol, ...] = ()
-    symbols_truncated: bool = False
-    imports_truncated: bool = False
-    syntax_error: str | None = None
 
 
 class ParsedContent(FrozenModel):
@@ -326,21 +299,35 @@ class ContentIndex(FrozenModel):
     gaps: tuple[CoverageGap, ...] = ()
     counters: dict[str, int] = Field(default_factory=dict)
 
+    @cached_property
+    def contents_by_id(self) -> dict[str, ParsedContent]:
+        return {item.content_id: item for item in self.contents}
+
+    @cached_property
+    def snapshots_by_id(self) -> dict[str, SnapshotContent]:
+        return {item.snapshot_id: item for item in self.snapshots}
+
+    @cached_property
+    def snapshots_by_path(self) -> dict[tuple[str, str], SnapshotContent]:
+        return {(item.commit_sha, item.path): item for item in self.snapshots}
+
+    @cached_property
+    def contents_by_oid(self) -> dict[str, ParsedContent]:
+        # The same bytes may occur as both source and plain text. Prefer
+        # structural metadata for fallback lookups, without reparsing blobs.
+        return {
+            item.oid: item for item in sorted(
+                self.contents, key=lambda item: (item.text is not None, item.code is not None)
+            )
+        }
+
     def content_for(self, snapshot_id: str) -> ParsedContent | None:
-        snapshot = next(
-            (item for item in self.snapshots if item.snapshot_id == snapshot_id),
-            None,
-        )
-        if snapshot is None or snapshot.content_id is None:
-            return None
-        return next(
-            (
-                content
-                for content in self.contents
-                if content.content_id == snapshot.content_id
-            ),
-            None,
-        )
+        snapshot = self.snapshots_by_id.get(snapshot_id)
+        return self.contents_by_id.get(snapshot.content_id) if snapshot else None
+
+    def content_at(self, commit_sha: str | None, path: str) -> ParsedContent | None:
+        snapshot = self.snapshots_by_path.get((commit_sha, path))
+        return self.contents_by_id.get(snapshot.content_id) if snapshot else None
 
 
 def detect_language(path: str, text: str | None = None) -> str | None:
@@ -363,18 +350,7 @@ def detect_language(path: str, text: str | None = None) -> str | None:
 
 def module_name(path: str) -> str | None:
     """Derive a dotted Python module name without importing anything."""
-
-    pure = PurePosixPath(path)
-    if pure.suffix.lower() not in {".py", ".pyi"}:
-        return None
-    parts = list(pure.with_suffix("").parts)
-    if parts and parts[0] in {"src", "lib"}:
-        parts = parts[1:]
-    if parts and parts[-1] == "__init__":
-        parts = parts[:-1]
-    if not parts:
-        return None
-    return ".".join(parts)
+    return python_module_name(path)
 
 
 def media_type_for(path: str, text: str | None = None) -> MediaType:
@@ -397,7 +373,7 @@ def media_type_for(path: str, text: str | None = None) -> MediaType:
 
 
 class ContentExtractor:
-    """Read blobs once, then parse Markdown, Python ASTs, and code metadata."""
+    """Read blobs once, then dispatch source to independently testable adapters."""
 
     def __init__(
         self,
@@ -405,10 +381,13 @@ class ContentExtractor:
         ids: IdFactory,
         *,
         settings: ContentSettings | None = None,
+        code_parsers: Mapping[str, SourceCodeParser] | None = None,
     ) -> None:
         self._read_blob = read_blob
         self.ids = ids
         self.settings = settings or ContentSettings()
+        self._policy_key = hashlib.sha256(self.settings.model_dump_json().encode()).hexdigest()[:12]
+        self.code_parsers = dict(code_parsers) if code_parsers is not None else {"python": PythonParser()}
         self._markdown = MarkdownIt("commonmark")
         self._raw: dict[str, bytes | None] = {}
         self._parsed: dict[tuple[str, str], ParsedContent] = {}
@@ -419,17 +398,18 @@ class ContentExtractor:
         history: GitHistory,
         *,
         settings: ContentSettings | None = None,
+        code_parsers: Mapping[str, SourceCodeParser] | None = None,
     ) -> "ContentExtractor":
-        return cls(history.read_blob, history.ids, settings=settings)
+        return cls(history.read_blob, history.ids, settings=settings, code_parsers=code_parsers)
 
     # ------------------------------------------------------------------ public
     def parse(self, oid: str, *, path: str = "") -> ParsedContent:
-        """Parse one blob; the result is cached by object ID and media type."""
+        """Parse one blob; cache by object ID, language, adapter, and policy."""
 
         data = self._blob(oid)
         if data is None:
             return self._unavailable(oid, path)
-        text = _decode(data)
+        text = _decode(data, python=detect_language(path) == "python")
         media_type = media_type_for(path, text if text is not None else None)
         return self._parse_bytes(oid, data, text, media_type, path)
 
@@ -439,7 +419,22 @@ class ContentExtractor:
         *,
         ledger: BudgetLedger | None = None,
     ) -> ContentIndex:
-        entries = sorted(index.snapshots, key=lambda item: (item.commit_sha, item.path))
+        commits = {
+            record.sha: record
+            for record in (*index.selection.selected_commits, *index.selection.boundary_commits)
+        }
+        # Git timestamps can be skewed and SHAs are not ordered by ancestry.
+        # Parse parents first; serialized output is still sorted by SHA/path.
+        ancestry = {
+            sha: tuple(parent for parent in commits[sha].parents if parent in commits)
+            for sha in sorted(commits)
+        }
+        ranks = {sha: rank for rank, sha in enumerate(TopologicalSorter(ancestry).static_order())}
+        entries = sorted(index.snapshots, key=lambda item: (
+            ranks.get(item.commit_sha, len(ranks)), item.commit_sha, item.path,
+        ))
+        changes = {(change.commit_sha, change.path): change for change in index.changes}
+        parsed_snapshots: dict[tuple[str, str], SnapshotContent] = {}
         contents: dict[str, ParsedContent] = {}
         snapshots: list[SnapshotContent] = []
         sections: list[SectionRecord] = []
@@ -550,10 +545,20 @@ class ContentExtractor:
                 else:
                     if ledger is not None and not already_loaded:
                         ledger.reserve_text(len(data))
-                    text = _decode(data)
+                    text = _decode(data, python=detect_language(entry.path) == "python")
                     media_type = media_type_for(entry.path, text)
+                    commit = commits.get(entry.commit_sha)
+                    parent_sha = commit.parents[0] if commit and commit.parents else None
+                    change = changes.get((entry.commit_sha, entry.path))
+                    parent_path = (
+                        change.old_path
+                        if change and change.status in {"renamed", "copied"} and change.old_path
+                        else entry.path
+                    )
+                    previous = parsed_snapshots.get((parent_sha, parent_path)) if parent_sha is not None else None
                     parsed = self._parse_bytes(
-                        entry.object_id, data, text, media_type, entry.path
+                        entry.object_id, data, text, media_type, entry.path,
+                        previous_content_id=previous.content_id if previous else None,
                     )
                     content_id = parsed.content_id
                     status = parsed.status
@@ -568,12 +573,13 @@ class ContentExtractor:
                 content_id=content_id,
                 status=status,
                 media_type=content.media_type if content is not None else media_type,
-                language=detect_language(entry.path),
+                language=content.language if content is not None else detect_language(entry.path),
                 module=module,
                 is_baseline=entry.is_baseline,
                 source_url=entry.source_url,
             )
             snapshots.append(snapshot)
+            parsed_snapshots[entry.commit_sha, entry.path] = snapshot
 
             if content is not None and content.markdown is not None:
                 for section in content.markdown.sections:
@@ -636,23 +642,26 @@ class ContentExtractor:
         return self._raw[oid]
 
     def _content_id(self, oid: str, kind: str) -> str:
-        return self.ids.content(oid, kind)
+        return self.ids.content(oid, f"{PARSER_VERSION}:{self._policy_key}:{kind}")
 
     def _unavailable(self, oid: str, path: str) -> ParsedContent:
-        content_id = self._content_id(oid, "unavailable")
-        cached = self._parsed.get((oid, "unavailable"))
+        media_type = media_type_for(path)
+        language = detect_language(path)
+        kind = f"unavailable:{media_type}:{language}"
+        content_id = self._content_id(oid, kind)
+        cached = self._parsed.get((oid, kind))
         if cached is not None:
             return cached
         parsed = ParsedContent(
             content_id=content_id,
             blob_id=self.ids.blob(oid),
             oid=oid,
-            media_type=media_type_for(path),
+            media_type=media_type,
             status="unavailable",
-            language=detect_language(path),
+            language=language,
             error="blob object is not available in the local object database",
         )
-        self._parsed[(oid, "unavailable")] = parsed
+        self._parsed[(oid, kind)] = parsed
         return parsed
 
     def _parse_bytes(
@@ -662,15 +671,19 @@ class ContentExtractor:
         text: str | None,
         media_type: MediaType,
         path: str,
+        *,
+        previous_content_id: str | None = None,
     ) -> ParsedContent:
-        key = (oid, media_type)
+        language = detect_language(path, text)
+        parser = self.code_parsers.get(language)
+        parser_key = f"{parser.name}:{parser.version}" if parser else (language or media_type)
+        key = (oid, f"{media_type}:{parser_key}")
         cached = self._parsed.get(key)
         if cached is not None:
             return cached
 
-        language = detect_language(path, text)
         base = ParsedContent(
-            content_id=self._content_id(oid, media_type),
+            content_id=self._content_id(oid, key[1]),
             blob_id=self.ids.blob(oid),
             oid=oid,
             media_type=media_type,
@@ -690,10 +703,11 @@ class ContentExtractor:
                     ),
                 }
             )
-        elif media_type == "binary":
+        elif media_type == "binary" or b"\x00" in data[:8000]:
             parsed = base.model_copy(
                 update={
                     "status": "unsupported",
+                    "media_type": "binary",
                     "language": None,
                     "error": "binary content is not parsed",
                 }
@@ -702,11 +716,12 @@ class ContentExtractor:
             parsed = base.model_copy(
                 update={
                     "status": "undecodable",
-                    "error": "content is not valid UTF-8 text",
+                    "error": "content cannot be decoded using its declared encoding"
+                    if media_type == "python" else "content is not valid UTF-8 text",
                 }
             )
         elif text == "":
-            parsed = base.model_copy(update={"status": "empty"})
+            parsed = base.model_copy(update={"status": "empty", "text": ""})
         elif media_type == "markdown":
             parsed = base.model_copy(
                 update={
@@ -717,7 +732,10 @@ class ContentExtractor:
                 }
             )
         elif media_type in {"python", "code"}:
-            code = self._parse_code(oid, text, language or "text")
+            code = self._parse_code(
+                base.content_id, text, language or "text",
+                previous_content_id=previous_content_id,
+            )
             parsed = base.model_copy(
                 update={
                     "text_bytes": len(data),
@@ -934,39 +952,19 @@ class ContentExtractor:
         )
 
     # ------------------------------------------------------------------ code
-    def _parse_code(self, oid: str, text: str, language: str) -> CodeDocument:
-        shebang = _shebang(text)
-        if language != "python":
-            return CodeDocument(language=language, shebang=shebang)
-
-        try:
-            tree = ast.parse(text)
-        except (SyntaxError, ValueError) as error:
-            return CodeDocument(
-                language=language,
-                shebang=shebang,
-                syntax_error=_syntax_error(error),
+    def _parse_code(
+        self, content_id: str, text: str, language: str,
+        *, previous_content_id: str | None = None,
+    ) -> CodeDocument:
+        parser = self.code_parsers.get(language)
+        if parser is None:
+            return CodeDocument(language=language, shebang=_shebang(text))
+        if previous_content_id is not None and isinstance(parser, IncrementalSourceCodeParser):
+            return parser.parse_incremental(
+                text, content_id=content_id, settings=self.settings,
+                previous_content_id=previous_content_id,
             )
-
-        symbols: list[CodeSymbol] = []
-        truncated = _collect_symbols(
-            tree.body,
-            prefix="",
-            in_class=False,
-            symbols=symbols,
-            limit=self.settings.max_symbols,
-            content_id=self.ids.content(oid, "python"),
-        )
-        imports = _collect_imports(tree, self.settings.max_imports)
-        return CodeDocument(
-            language=language,
-            shebang=shebang,
-            docstring=_truncate(ast.get_docstring(tree, clean=True), _MAX_DOCSTRING_CHARS),
-            imports=imports[0],
-            symbols=tuple(symbols),
-            symbols_truncated=truncated,
-            imports_truncated=imports[1],
-        )
+        return parser.parse(text, content_id=content_id, settings=self.settings)
 
     # ------------------------------------------------------------------ reporting
     def _content_gaps(self, content: ParsedContent, add_gap) -> None:
@@ -1143,10 +1141,11 @@ def _line_count(text: str) -> int:
     return text.count("\n") + (0 if text.endswith("\n") else 1)
 
 
-def _decode(data: bytes) -> str | None:
+def _decode(data: bytes, *, python: bool = False) -> str | None:
     try:
-        return data.decode("utf-8-sig")
-    except UnicodeDecodeError:
+        encoding = tokenize.detect_encoding(io.BytesIO(data).readline)[0] if python else "utf-8-sig"
+        return data.decode(encoding)
+    except (UnicodeDecodeError, SyntaxError, LookupError):
         return None
 
 
@@ -1243,138 +1242,3 @@ def _truncate(value: str | None, limit: int) -> str | None:
     if len(value) <= limit:
         return value
     return value[:limit]
-
-
-def _unparse(node: ast.AST) -> str:
-    try:
-        return _truncate(ast.unparse(node), _MAX_SYMBOL_TEXT_CHARS) or ""
-    except (AttributeError, ValueError):
-        return type(node).__name__
-
-
-def _collect_symbols(
-    body: list[ast.stmt],
-    *,
-    prefix: str,
-    in_class: bool,
-    symbols: list[CodeSymbol],
-    limit: int,
-    content_id: str,
-) -> bool:
-    for node in body:
-        if len(symbols) >= limit:
-            return True
-        if isinstance(node, ast.ClassDef):
-            qualname = f"{prefix}.{node.name}" if prefix else node.name
-            symbols.append(
-                CodeSymbol(
-                    symbol_id=stable_id(
-                        "symbol", content_id, qualname, str(node.lineno)
-                    ),
-                    kind="class",
-                    name=node.name,
-                    qualname=qualname,
-                    line=node.lineno,
-                    column=node.col_offset,
-                    end_line=node.end_lineno or node.lineno,
-                    decorators=tuple(_unparse(item) for item in node.decorator_list),
-                    bases=tuple(_unparse(item) for item in node.bases),
-                    docstring=_truncate(
-                        ast.get_docstring(node, clean=True), _MAX_DOCSTRING_CHARS
-                    ),
-                )
-            )
-            if _collect_symbols(
-                node.body,
-                prefix=qualname,
-                in_class=True,
-                symbols=symbols,
-                limit=limit,
-                content_id=content_id,
-            ):
-                return True
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            qualname = f"{prefix}.{node.name}" if prefix else node.name
-            is_async = isinstance(node, ast.AsyncFunctionDef)
-            if in_class:
-                kind = "async-method" if is_async else "method"
-            else:
-                kind = "async-function" if is_async else "function"
-            symbols.append(
-                CodeSymbol(
-                    symbol_id=stable_id(
-                        "symbol", content_id, qualname, str(node.lineno)
-                    ),
-                    kind=kind,
-                    name=node.name,
-                    qualname=qualname,
-                    line=node.lineno,
-                    column=node.col_offset,
-                    end_line=node.end_lineno or node.lineno,
-                    decorators=tuple(_unparse(item) for item in node.decorator_list),
-                    docstring=_truncate(
-                        ast.get_docstring(node, clean=True), _MAX_DOCSTRING_CHARS
-                    ),
-                )
-            )
-            if _collect_symbols(
-                node.body,
-                prefix=qualname,
-                in_class=False,
-                symbols=symbols,
-                limit=limit,
-                content_id=content_id,
-            ):
-                return True
-    return False
-
-
-def _collect_imports(
-    tree: ast.Module, limit: int
-) -> tuple[tuple[ImportRecord, ...], bool]:
-    nodes = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.Import, ast.ImportFrom))
-    ]
-    nodes.sort(key=lambda node: (node.lineno, node.col_offset))
-    truncated = len(nodes) > limit
-    records: list[ImportRecord] = []
-    for node in nodes[:limit]:
-        if isinstance(node, ast.Import):
-            records.append(
-                ImportRecord(
-                    kind="import",
-                    module=None,
-                    names=tuple(
-                        alias.name if alias.asname is None
-                        else f"{alias.name} as {alias.asname}"
-                        for alias in node.names
-                    ),
-                    line=node.lineno,
-                )
-            )
-        else:
-            records.append(
-                ImportRecord(
-                    kind="from",
-                    module=node.module,
-                    names=tuple(
-                        alias.name if alias.asname is None
-                        else f"{alias.name} as {alias.asname}"
-                        for alias in node.names
-                    ),
-                    level=node.level,
-                    line=node.lineno,
-                )
-            )
-    return tuple(records), truncated
-
-
-def _syntax_error(error: BaseException) -> str:
-    if isinstance(error, SyntaxError):
-        location = f"line {error.lineno}" if error.lineno else "unknown line"
-        return _truncate(
-            f"{error.msg} ({location})", _MAX_SYMBOL_TEXT_CHARS
-        ) or "syntax error"
-    return _truncate(str(error), _MAX_SYMBOL_TEXT_CHARS) or type(error).__name__

@@ -211,6 +211,15 @@ class LLMSettings(FrozenModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     privacy_consent: bool = False
     max_attempts: int = Field(default=2, ge=1, le=5)
+    prompt_version: str = "v1"
+    cache_file: str = "data/llm/cache.json"
+
+    @field_validator("prompt_version", "cache_file")
+    @classmethod
+    def validate_llm_strings(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("LLM prompt version and cache file must not be blank")
+        return value.strip()
 
 
 class RuntimeConfig(FrozenModel):

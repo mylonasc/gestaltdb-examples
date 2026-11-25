@@ -68,6 +68,8 @@ model = "gpt-4.1-mini"
 temperature = 0.0
 privacy_consent = false
 max_attempts = 2
+prompt_version = "v1"
+cache_file = "data/llm/cache.json"
 
 [runtime]
 data_root = "data"

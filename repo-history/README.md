@@ -190,3 +190,37 @@ version they were decided against, merges mark old topics as superseded
 instead of deleting them, and re-running against a kept registry snapshot
 reproduces the original decisions exactly. `LabelingSettings` (`[labeling]`
 section) sets the reuse/alias thresholds, minimum score, and retrieval limit.
+
+## LangChain structured LLM enrichment
+
+`Enricher` wraps an injected LangChain chat model (`BaseChatModel`) with
+opt-in consent, budgets, caching, validation, and full provenance. Proposals
+are typed (`LLMTopicProposal`, `LLMSummaryProposal`, `LLMLinkProposal`) and
+grounded: reused topics and link targets must come from the supplied
+candidates, and invalid output is retried, then abstained — never invented:
+
+```python
+from repo_history.enrichment import Enricher, EnrichmentCache, build_chat_model
+
+settings.llm.enabled = True  # plus privacy_consent=True, or it refuses
+model = build_chat_model(settings.llm)  # documented OpenAI configuration
+enricher = Enricher(
+    model, settings.llm, ledger=ledger,
+    cache=EnrichmentCache(settings.llm.cache_file), run_id=run_id,
+)
+result = enricher.enrich_topic(
+    subject_id=..., subject_text=..., candidates=[...],
+    registry_version=..., info_horizon=...,
+)
+```
+
+Every call reserves LLM requests/tokens from the shared `BudgetLedger`
+before invoking (retries spend too), records estimated and actual usage in
+`Provenance`, and caches the validated proposal under a key of model, prompt
+version, schema version, method, and context hash — changing any of them
+invalidates the entry. Tests use `GenericFakeChatModel` from
+`langchain-core`; the real smoke runs `ChatOpenAI` (`gpt-4.1-mini`) via the
+`openai` extra with explicit consent. Unavailable history becomes a
+`llm-history-unavailable` gap instead of a prompt. `[llm]` settings cover
+provider, model, temperature, privacy consent, retry attempts, prompt version,
+and cache file.

@@ -6,7 +6,7 @@ pinned, bounded slice of [`mylonasc/tf_gnns`](https://github.com/mylonasc/tf_gnn
 and keeps source evidence, normalized history, and derived analysis distinct.
 
 The epic specification is
-[`../EPIC_01_REPO_HISTORY_EXAMPLE.md`](../EPIC_01_REPO_HISTORY_EXAMPLE.md).
+[`./EPIC_01_REPO_HISTORY_EXAMPLE.md`](./EPIC_01_REPO_HISTORY_EXAMPLE.md).
 
 ## Development
 
@@ -206,9 +206,11 @@ and explicit re-exports). External modules link to `ExternalLibrary` nodes
 through `PROVIDED_BY`; importing local modules link through `DEPENDS_ON`.
 Libraries carry observed import-root identities, **not guessed distribution
 names or installed versions**; stdlib and third-party/unresolved roots are
-distinguished. Source extraction never imports project code.
-See [the parser review](PARSER_REVIEW.md) for architecture, regression findings,
-static-analysis limitations, and recommended next improvements.
+distinguished. Source extraction never imports project code. Static-analysis
+limits: definition/dependency edges are source evidence, not proof of runtime
+behavior. Dynamic imports, monkey patching, and call graphs are out of scope,
+and retained definitions need end-of-presence reconciliation before being
+treated as currently active.
 `map_folders` emits `Folder` entities, a single `Repository` root, and
 immediate-parent `BELONGS_TO` file→folder and folder→folder edges (plus
 `HAS_BRANCH` repo→branch edges via `map_repository_branches`). Containment

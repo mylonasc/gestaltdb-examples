@@ -9,3 +9,11 @@ htmlcov/
 # Recorded offline fixtures are committed intentionally.
 !tests/data/
 !tests/data/**
+
+# Generated demo/run outputs are reproducible via examples/ scripts.
+examples/graph.json
+examples/viewer.html
+examples/evaluation.md
+examples/report.md
+examples/run-manifest.json
+examples/slice.svg

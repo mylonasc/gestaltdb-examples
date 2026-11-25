@@ -266,6 +266,8 @@ def build_viewer_data(
             moments = folder_moments.get(path, [])
             if moments:
                 moment = min(moments)
+        elif kind != "Repository" and isinstance(write.valid_from, datetime):
+            moment = write.valid_from
         if moment is not None:
             times[write.logical_id] = moment
         label = str(write.properties.get("path", write.properties.get("name", write.logical_id)))

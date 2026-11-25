@@ -44,6 +44,7 @@ __all__ = [
     "ABOUT",
     "BELONGS_TO",
     "CHILD_OF",
+    "DEFINED_AT",
     "HAS_BRANCH",
     "HAS_LABEL",
     "IMPORTS",
@@ -64,6 +65,7 @@ __all__ = [
     "RelationshipWrite",
     "VersionRecord",
     "WriteReport",
+    "map_classes",
     "map_discovery",
     "map_folders",
     "map_git_index",
@@ -77,6 +79,7 @@ __all__ = [
 # the ``type`` property, so the sink always sets it.
 ABOUT = "ABOUT"
 BELONGS_TO = "BELONGS_TO"
+DEFINED_AT = "DEFINED_AT"
 PARENT_COMMIT = "PARENT_COMMIT"
 MEMBER_OF = "MEMBER_OF"
 OF_FILE = "OF_FILE"
@@ -807,6 +810,97 @@ def map_imports(
     return MappedGraph(relationships=tuple(relationships), skipped=skipped)
 
 
+def map_classes(
+    content: ContentIndex, index: GitIndex, ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Map class definitions to ``Class`` entities plus ``DEFINED_AT`` edges.
+
+    Classes are the architectural units the topic model reasons about; only
+    ``class`` symbols become entities (functions and methods stay out of the
+    graph by design, and would ride the same code path).  Edge IDs omit the
+    commit so re-observation across commits becomes versions of one edge.
+    """
+
+    entities: list[EntityWrite] = []
+    relationships: list[RelationshipWrite] = []
+    commit_times = {
+        record.sha: record.committed_at
+        for record in (*index.selection.selected_commits, *index.selection.boundary_commits)
+    }
+    seen_entities: set[str] = set()
+    seen_edges: set[tuple[str, str, str]] = set()
+    for entry in index.snapshots:
+        committed_at = commit_times.get(entry.commit_sha)
+        if committed_at is None:
+            continue
+        parsed = content.content_for(entry.snapshot_id)
+        if parsed is None or parsed.status != "parsed" or parsed.code is None:
+            continue
+        for symbol in parsed.code.symbols:
+            if symbol.kind != "class":
+                continue
+            class_id = stable_id("class", ids.repository_id, entry.path, symbol.qualname)
+            if (class_id, committed_at) not in seen_entities:
+                seen_entities.add((class_id, committed_at))
+                entities.append(
+                    EntityWrite(
+                        logical_id=class_id,
+                        labels=("Class",),
+                        properties={
+                            "name": symbol.name,
+                            "qualname": symbol.qualname,
+                            "path": entry.path,
+                            "line": symbol.line,
+                        },
+                        valid_from=committed_at,
+                        origin="git",
+                        origin_id=f"{entry.path}:{symbol.qualname}",
+                        event_id=stable_id(
+                            "graph-write", ids.repository_id, "git-class",
+                            entry.path, symbol.qualname,
+                        ),
+                        run_id=run_id,
+                        info_horizon=committed_at,
+                        evidence_ids=(
+                            ids.evidence(
+                                "git", entry.commit_sha,
+                                f"{entry.source_url}#L{symbol.line}",
+                            ),
+                        ),
+                    )
+                )
+            key = (entry.commit_sha, entry.path, symbol.qualname)
+            if key in seen_edges:
+                continue
+            seen_edges.add(key)
+            relationships.append(
+                RelationshipWrite(
+                    edge_id=stable_id(
+                        "edge", ids.repository_id, DEFINED_AT, entry.path, symbol.qualname
+                    ),
+                    edge_type=DEFINED_AT,
+                    source=class_id,
+                    target=ids.file(entry.path),
+                    properties={"line": symbol.line, "qualname": symbol.qualname},
+                    valid_from=committed_at,
+                    origin="git",
+                    origin_id=f"{entry.path}:{symbol.qualname}",
+                    event_id=stable_id(
+                        "graph-write", ids.repository_id, "git-defined-at",
+                        entry.path, symbol.qualname,
+                    ),
+                    run_id=run_id,
+                    info_horizon=committed_at,
+                    evidence_ids=(
+                        ids.evidence(
+                            "git", entry.commit_sha, f"{entry.source_url}#L{symbol.line}"
+                        ),
+                    ),
+                )
+            )
+    return MappedGraph(entities=tuple(entities), relationships=tuple(relationships))
+
+
 def map_folders(
     paths: Sequence[str], ids: IdFactory, *, run_id: str, window_start: datetime
 ) -> MappedGraph:
@@ -1304,7 +1398,7 @@ class GraphSink(GraphSinkProtocol):
         if labels is None:
             labels = (
                 "Commit", "File", "Snapshot", "WorkItem", "ProviderLabel", "Branch",
-                "Topic",
+                "Topic", "Folder", "Class", "Repository",
             )
         return {label: self._db.count_nodes_by_label(label) for label in labels}
 
@@ -1315,8 +1409,8 @@ class GraphSink(GraphSinkProtocol):
         self._ensure_ready()
         if edge_types is None:
             edge_types = (
-                ABOUT, PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, IMPORTS,
-                HAS_BRANCH, BELONGS_TO, HAS_LABEL, CHILD_OF, TIP_OF, MERGED_AS,
+                ABOUT, DEFINED_AT, PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, IMPORTS,
+                BELONGS_TO, HAS_BRANCH, HAS_LABEL, CHILD_OF, TIP_OF, MERGED_AS,
                 "MENTIONS", "INTENDS_TO_RESOLVE", "CLOSED_BY", "RELATED_TO",
             )
         return {edge_type: self._db.count_edges_by_type(edge_type) for edge_type in edge_types}

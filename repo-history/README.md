@@ -167,10 +167,14 @@ media type), and `Branch` entities with `PARENT_COMMIT`, `MEMBER_OF`,
 `OF_FILE`, `TOUCHES` (direct commit-to-file evidence), and `TIP_OF`
 relationships; `map_imports` resolves intra-repository Python imports
 (absolute, relative, and `__init__` packages; third-party imports are
-reported, never invented) into `IMPORTS` file-to-file edges. Structural and
-containment edges (`PARENT_COMMIT`, `MEMBER_OF`, `OF_FILE`, `TOUCHES`,
-`TIP_OF`, `CHILD_OF`) carry `hierarchical: true` provenance for stronger
-graph pulls. `map_discovery` emits `WorkItem` and `ProviderLabel` entities
+reported, never invented) into `IMPORTS` file-to-file edges; `map_classes`
+emits `Class` entities with `DEFINED_AT` edges to their files; `map_folders`
+emits `Folder` entities, a single `Repository` root, and `BELONGS_TO`
+file-to-folder edges (plus `HAS_BRANCH` repo-to-branch edges via
+`map_repository_branches`). Structural and containment edges
+(`PARENT_COMMIT`, `MEMBER_OF`, `OF_FILE`, `TOUCHES`, `TIP_OF`, `CHILD_OF`,
+`BELONGS_TO`, `HAS_BRANCH`) carry `hierarchical: true` provenance for a
+stronger configurable pull. `map_discovery` emits `WorkItem` and `ProviderLabel` entities
 with `HAS_LABEL`, `CHILD_OF`, and `MERGED_AS` relationships; `map_registry`
 emits `Topic` entities and `map_topic_assignments` emits `ABOUT` edges from
 deterministic topic assignments (commits, files, and work items). Out-of-scope
@@ -357,12 +361,12 @@ and writes `examples/viewer.html`, a self-contained page (D3 loaded from
 CDN, with an offline data-table fallback) with a force-directed layout whose
 x-axis is time and whose y-axis follows the entity hierarchy
 (Repository → Branch → WorkItem → Commit → Topic → Folder → File). All edge
-kinds are included — `PARENT_COMMIT`, `TIP_OF`, `TOUCHES`, `IMPORTS`
-(intra-repo Python imports), `CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`,
-`RELATED_TO` (provider and inferred), `BELONGS_TO`, `HAS_BRANCH`, and `ABOUT`
-(topic assignments; snapshot occurrences aggregate to their file, as the
-page footer notes) — while `MEMBER_OF`/`OF_FILE` snapshot granularity stays
-folded into `TOUCHES`:
+kinds are included — `PARENT_COMMIT`, `TIP_OF`, `TOUCHES` (including
+`DEFINED_AT` class-to-file edges), `IMPORTS` (intra-repo Python imports),
+`CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`, `RELATED_TO` (provider and
+inferred), `BELONGS_TO`, `HAS_BRANCH`, and `ABOUT` (topic assignments;
+snapshot occurrences aggregate to their file, as the page footer notes) —
+while `MEMBER_OF`/`OF_FILE` snapshot granularity stays folded into `TOUCHES`:
 
 - every timestamped node is normalized to `t` in `[0, 1]` across the graph;
   an anchor force pulls every node toward the mid-time center while a second
@@ -380,8 +384,9 @@ folded into `TOUCHES`:
   file nodes and remote tracking refs resolve to PR head branches.
 - interactions: drag, zoom/pan, hover tooltips, click-to-focus neighborhoods
   with provenance and evidence, kind/edge-type filters, label and time-color
-  toggles, a time-window dimmer, text search, pause/reset, and sliders for
-  anchor pull, time spread, link distance, and repulsion.
+  toggles (files additionally colorable by detected type), a time-window
+  dimmer, text search, pause/reset, and sliders for anchor pull, time spread,
+  link distance and pull, hierarchical-link strength, and hierarchy pull.
 
 `viz_d3.build_viewer_data()` bounds the graph (`max_nodes`, core entities
 always kept, omissions reported) and `viz_d3.render_viewer_html()` embeds

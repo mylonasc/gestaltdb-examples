@@ -440,6 +440,74 @@ def test_map_imports_resolves_absolute_relative_and_package_imports():
     assert len({edge.edge_id for edge in mapped.relationships}) == len(mapped.relationships)
 
 
+def test_map_classes_creates_class_entities_and_defined_at_edges():
+    from repo_history.content import CodeDocument, CodeSymbol, ImportRecord, ParsedContent
+    from repo_history.graph import DEFINED_AT, map_classes
+
+    def parsed(content_id, *symbols):
+        return ParsedContent(
+            content_id=content_id, blob_id=f"blob:{content_id}", oid="o" * 40,
+            media_type="python", status="parsed", language="python",
+            code=CodeDocument(language="python", imports=(), symbols=tuple(symbols)),
+        )
+
+    def sym(name, qualname, kind="class", line=1):
+        return CodeSymbol(
+            symbol_id=f"s:{qualname}", kind=kind, name=name, qualname=qualname,
+            line=line, column=0, end_line=line + 5,
+        )
+
+    snapshots = [
+        SnapshotContent(
+            snapshot_id="snap:a", commit_sha="c" * 40, path="models/gcn.py",
+            oid="o" * 40, content_id="c:a", status="parsed", media_type="python",
+            language="python", module="models.gcn", is_baseline=False, source_url="u",
+        ),
+    ]
+    content = ContentIndex(
+        contents=(
+            parsed("c:a", sym("GraphConv", "models.GraphConv"),
+                   sym("helper", "models.helper", kind="function")),
+        ),
+        snapshots=tuple(snapshots),
+    )
+    index = GitIndex(
+        selection=selection(
+            (commit("c" * 40, committed_at=DAY_ONE),),
+            (commit("b" * 40, committed_at=T0),),
+        ),
+        snapshots=(
+            TreeEntryRecord(
+                snapshot_id="snap:a", commit_sha="c" * 40, path="models/gcn.py",
+                object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+                is_binary=False, is_lfs_pointer=False, content_status="inspected",
+                source_url="u",
+            ),
+        ),
+    )
+
+    mapped = map_classes(content, index, ids(), run_id=RUN_ID)
+
+    by_id = {entity.logical_id: entity for entity in mapped.entities}
+    assert len(by_id) == 1  # functions are not nodes
+    class_id = next(iter(by_id))
+    assert by_id[class_id].labels == ("Class",)
+    assert by_id[class_id].properties["qualname"] == "models.GraphConv"
+    assert by_id[class_id].properties["line"] == 1
+    assert len(mapped.relationships) == 1
+    edge = mapped.relationships[0]
+    assert edge.edge_type == DEFINED_AT
+    assert edge.source == class_id
+    assert edge.target == ids().file("models/gcn.py")
+    assert edge.valid_from == DAY_ONE
+
+
+def stable_class_id(path, qualname):
+    from repo_history.ids import stable_id
+
+    return stable_id("class", ids().repository_id, path, qualname)
+
+
 def test_map_registry_and_assignments_cover_topics_and_about_edges():
     registry = seed_registry(at=NOW)
     registry, first = registry.register(

@@ -401,12 +401,48 @@ def test_export_is_deterministic():
     assert build_viewer_data(**fixture_inputs()) == build_viewer_data(**fixture_inputs())
 
 
+def test_extra_structural_nodes_join_with_hierarchy_times():
+    from repo_history.graph import EntityWrite
+
+    arguments = fixture_inputs()
+    arguments["extra_nodes"] = [
+        EntityWrite(
+            logical_id="folder:docs", labels=("Folder",),
+            properties={"path": "docs", "file_count": 1},
+            valid_from=WINDOW.start, origin="git", origin_id="folder:docs",
+            event_id="e1", run_id=RUN_ID, info_horizon=NOW, evidence_ids=(),
+        ),
+        EntityWrite(
+            logical_id="repo:x", labels=("Repository",),
+            properties={"url": "https://example.test/r"},
+            valid_from=WINDOW.start, origin="git", origin_id="repo",
+            event_id="e2", run_id=RUN_ID, info_horizon=NOW, evidence_ids=(),
+        ),
+    ]
+    data = build_viewer_data(**arguments)
+    by_id = {node["id"]: node for node in data["nodes"]}
+
+    assert by_id["folder:docs"]["kind"] == "Folder"
+    assert by_id["folder:docs"]["t"] == 1.0
+    assert by_id["repo:x"]["t"] is None
+    assert "Repository" in {node["kind"] for node in data["nodes"]}
+
+
+def test_viewer_has_rank_force_and_no_label_force():
+    html = render_viewer_html(build_viewer_data(**fixture_inputs()))
+
+    assert "rankY" in html and "TIERS" in html
+    assert 'id="rank"' in html
+    assert "labelForce" not in html and "nolap" not in html
+    assert "hierarchical pull" in html
+
+
 def test_page_embeds_data_controls_and_temporal_forces():
     html = render_viewer_html(build_viewer_data(**fixture_inputs()), title="Demo")
 
     assert "https://cdn.jsdelivr.net/npm/d3@7" in html
-    for control in ("tmin", "tmax", "anchor", "spread", "ldist", "charge",
-                    "labels", "bytime", "search", "find", "pause", "reset",
+    for control in ("tmin", "tmax", "anchor", "spread", "rank", "ldist", "charge",
+                    "labels", "bytime", "filecolors", "search", "find", "pause", "reset",
                     "details", "legend", "kindFilters", "edgeFilters"):
         assert f'id="{control}"' in html
     for hook in ("temporalForce", "forceX", "forceY", "forceLink", "forceCollide"):

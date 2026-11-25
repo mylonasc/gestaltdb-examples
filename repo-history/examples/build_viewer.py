@@ -22,6 +22,7 @@ from repo_history.graph import (
     PARENT_COMMIT,
     TIP_OF,
     TOUCHES,
+    map_classes,
     map_discovery,
     map_folders,
     map_git_index,
@@ -213,6 +214,7 @@ def main() -> None:
         [branch.name for branch in index.branches], ids, run_id=RUN_ID,
         window_start=config.repository.window.start,
     )
+    classes = map_classes(content, index, ids, run_id=RUN_ID)
     data = build_viewer_data(
         index=index, discovery=discovery, content=content,
         links=[*text_report.links, *provider_report.links, *topic_report.links],
@@ -235,8 +237,9 @@ def main() -> None:
             *map_topic_assignments(assignments, ids, run_id=RUN_ID).relationships,
             *folders.relationships,
             *has_branches.relationships,
+            *classes.relationships,
         ],
-        extra_nodes=[*folders.entities],
+        extra_nodes=[*folders.entities, *classes.entities],
     )
     (HERE / "graph.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
     (HERE / "viewer.html").write_text(

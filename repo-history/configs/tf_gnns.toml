@@ -55,6 +55,12 @@ backend = "lmdb"
 overwrite = false
 map_size_bytes = 268435456
 
+[labeling]
+reuse_threshold = 0.5
+alias_threshold = 0.35
+min_score = 0.1
+top_k = 5
+
 [llm]
 enabled = false
 provider = "openai"

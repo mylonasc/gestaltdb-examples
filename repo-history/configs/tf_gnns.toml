@@ -1,0 +1,33 @@
+[repository]
+provider = "github"
+owner = "mylonasc"
+name = "tf_gnns"
+url = "https://github.com/mylonasc/tf_gnns.git"
+anchor = "9bfe6c19c02723dbbf101b9e311de684a4728bb1"
+allowed_work_items = [10, 11, 12]
+
+[repository.window]
+start = "2026-09-13T00:00:00Z"
+end = "2026-09-15T00:00:00Z"
+
+[budgets]
+max_commits = 32
+max_work_items = 25
+max_api_requests = 100
+max_text_bytes = 2097152
+max_llm_requests = 16
+max_llm_input_tokens = 64000
+max_llm_output_tokens = 8000
+
+[llm]
+enabled = false
+provider = "openai"
+model = "gpt-4.1-mini"
+temperature = 0.0
+privacy_consent = false
+max_attempts = 2
+
+[runtime]
+data_root = "data"
+cache_dir = "data/cache"
+offline = false

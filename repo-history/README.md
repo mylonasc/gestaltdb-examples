@@ -20,6 +20,27 @@ Importing the package does not require provider credentials. Live GitHub and LLM
 runs are opt-in. See the epic document for temporal semantics, budgets, safety,
 and coverage limitations.
 
+## Setup and privacy
+
+Setup is local-first: the default test suite and the recorded-evidence
+fixtures need no secrets and no network.  Two capabilities are explicitly
+opt-in and never run by default:
+
+- GitHub access reads the public `tf_gnns` repository through `httpx`
+  (`GITHUB_TOKEN` from the configured `token_env`; unauthenticated runs also
+  work within rate limits).  Raw responses are cached under `data/cache`
+  without credentials; the token never leaves the process or enters a file.
+- LLM enrichment requires `llm.enabled = true` **and**
+  `llm.privacy_consent = true`, plus the `openai` extra
+  (`uv run --with langchain-openai ...`) and `OPENAI_API_KEY`.  Prompts carry
+  only repository evidence already selected for indexing, and every call is
+  budgeted, cached, and recorded with model/prompt/schema provenance.
+
+Nothing in the pipeline mutates the target repository, opens sockets except
+through those two gates, or invents history: unavailable source history is
+reported as explicit coverage gaps.  `examples/evaluate.py` reproduces the
+bounded live evaluation; pass `--llm` only with consent and a key.
+
 ## Content extraction
 
 `ContentExtractor` reads blobs through the Git index instead of the working

@@ -23,8 +23,10 @@ from repo_history.graph import (
     TIP_OF,
     TOUCHES,
     map_discovery,
+    map_folders,
     map_git_index,
     map_imports,
+    map_repository_branches,
     map_topic_assignments,
 )
 from repo_history.ids import IdFactory
@@ -203,6 +205,14 @@ def main() -> None:
     )
     links = [*text_report.links, *provider_report.links, *topic_report.links]
 
+    folders = map_folders(
+        [snap.path for snap in content.snapshots], ids, run_id=RUN_ID,
+        window_start=config.repository.window.start,
+    )
+    has_branches = map_repository_branches(
+        [branch.name for branch in index.branches], ids, run_id=RUN_ID,
+        window_start=config.repository.window.start,
+    )
     data = build_viewer_data(
         index=index, discovery=discovery, content=content,
         links=[*text_report.links, *provider_report.links, *topic_report.links],
@@ -223,7 +233,10 @@ def main() -> None:
               if r.edge_type == CHILD_OF),
             *map_imports(content, index, ids, run_id=RUN_ID).relationships,
             *map_topic_assignments(assignments, ids, run_id=RUN_ID).relationships,
+            *folders.relationships,
+            *has_branches.relationships,
         ],
+        extra_nodes=[*folders.entities],
     )
     (HERE / "graph.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
     (HERE / "viewer.html").write_text(

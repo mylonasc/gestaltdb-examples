@@ -19,7 +19,7 @@ from typing import Any, Sequence
 from .content import ContentIndex, detect_language
 from .git import GitIndex
 from .github import GitHubDiscovery
-from .graph import HIERARCHICAL_EDGE_TYPES, RelationshipWrite
+from .graph import HIERARCHICAL_EDGE_TYPES, EntityWrite, RelationshipWrite
 from .ids import IdFactory
 from .labeling import TopicAssignment
 from .linking import LinkRecord, LinkRelation
@@ -52,6 +52,7 @@ def build_viewer_data(
     max_nodes: int = MAX_VIEWER_NODES,
     branch_names: dict[str, str] | None = None,
     extra_edges: Sequence[RelationshipWrite] = (),
+    extra_nodes: Sequence[EntityWrite] = (),
 ) -> dict[str, Any]:
     """Build a bounded, time-normalized node/edge document for the viewer.
 
@@ -62,7 +63,9 @@ def build_viewer_data(
     that are not ``LinkRecord`` reports; endpoints are canonicalized the same
     way and edges to dropped nodes are skipped.  ``ABOUT`` edges land on
     files: snapshot occurrences aggregate to their file for the file-level
-    view (noted in ``meta``).
+    view (noted in ``meta``).  Structural ``extra_nodes`` (folders, the
+    repository root) are added verbatim; folder timestamps follow their
+    contained files while the repository stays timeless.
     """
 
     ids = IdFactory(repository_url)
@@ -244,6 +247,34 @@ def build_viewer_data(
                 prov={"method": "link-provider", "run_id": run_id,
                       "horizon": info_horizon.isoformat()},
             )
+    # Structural nodes from the indexer (folders, repository root).
+    folder_moments: dict[str, list[datetime]] = {}
+    for snapshot in content.snapshots:
+        moment = commit_times.get(snapshot.commit_sha)
+        if moment is None:
+            continue
+        parts = snapshot.path.split("/")[:-1]
+        for depth in range(1, len(parts) + 1):
+            folder_moments.setdefault("/".join(parts[:depth]), []).append(moment)
+    for write in extra_nodes:
+        if write.logical_id in nodes:
+            continue
+        kind = write.labels[0] if write.labels else "Unknown"
+        moment = None
+        if kind == "Folder":
+            path = str(write.properties.get("path", ""))
+            moments = folder_moments.get(path, [])
+            if moments:
+                moment = min(moments)
+        if moment is not None:
+            times[write.logical_id] = moment
+        label = str(write.properties.get("path", write.properties.get("name", write.logical_id)))
+        add(
+            write.logical_id, kind, label[-34:], title=label, time=_iso(moment),
+            props=dict(write.properties),
+            prov={"method": write.origin, "run_id": run_id,
+                  "horizon": info_horizon.isoformat()},
+        )
     known = sorted(times.values())
     if len(known) >= 2 and known[0] != known[-1]:
         span = (known[-1] - known[0]).total_seconds()
@@ -318,7 +349,8 @@ def build_viewer_data(
             "max_nodes": max_nodes,
             "notes": (
                 "Snapshot occurrences aggregate to file nodes; "
-                "MEMBER_OF/OF_FILE snapshot granularity is folded into TOUCHES."
+                "MEMBER_OF/OF_FILE snapshot granularity is folded into TOUCHES. "
+                "Folder nodes group files by directory; the repository node roots branches."
             ),
         },
     }
@@ -361,11 +393,10 @@ button { margin: 2px; }
 <div class="row">link pull <input type="range" id="lpull" min="5" max="100" value="25"></div>
 <div class="row">hierarchical pull ×<input type="range" id="hier" min="100" max="300" value="160"></div>
 <div class="row">repulsion <input type="range" id="charge" min="0" max="400" value="140"></div>
-<div class="row">label spread <input type="range" id="labspread" min="0" max="100" value="60"></div>
+<div class="row">hierarchy pull <input type="range" id="rank" min="0" max="40" value="12"></div>
 <div class="row"><label><input type="checkbox" id="labels" checked> labels</label>
 <label><input type="checkbox" id="bytime"> color by time</label>
-<label><input type="checkbox" id="filecolors" checked> color files by type</label>
-<label><input type="checkbox" id="nolap" checked> separate labels</label></div>
+<label><input type="checkbox" id="filecolors" checked> color files by type</label></div>
 <h3>Search</h3><div class="row"><input type="text" id="search" placeholder="label substring"><button id="find">Find</button></div>
 <div class="row"><button id="pause">Pause</button><button id="reset">Reset view</button></div>
 <h3>Details</h3><div id="details">Click a node to inspect its relations.</div>
@@ -401,7 +432,8 @@ const DATA = __DATA__;
 
   // --- temporal forces: anchor pulls every x to mid-time center; ---
   // --- spread pulls left/right with strength growing from mid-time. ---
-  const P = { anchor: 0.06, base: 0.015, far: 0.14, gamma: 1.0, link: 0.25, hierMult: 1.6, label: 0.6 };
+  const P = { anchor: 0.06, base: 0.015, far: 0.14, gamma: 1.0, link: 0.25, hierMult: 1.6, rank: 0.12 };
+  const TIERS = { Repository: 0, Branch: 1, WorkItem: 2, Commit: 3, Topic: 4, Folder: 5, File: 6 };
   function temporalForce() {
     let nodes = [];
     function force(alpha) {
@@ -416,50 +448,9 @@ const DATA = __DATA__;
     return force;
   }
   const tForce = temporalForce();
+  const maxTier = Math.max(...Object.values(TIERS));
+  function rankY(d) { const t = TIERS[d.kind] === undefined ? maxTier : TIERS[d.kind]; return 70 + t * ((H - 140) / maxTier); }
 
-  // --- soft label-separation force: nudges label offsets (never nodes) ---
-  // --- so overlapping captions drift apart instead of stacking.        ---
-  function labelForce() {
-    let nodes = [];
-    let enabled = true;
-    function force(alpha) {
-      if (!enabled) return;
-      const k = P.label * alpha;
-      for (const n of nodes) {
-        if (n.tx === undefined) { n.tx = 12; n.ty = 4; }
-        if (n._hide) continue;
-        n.tx += (12 - n.tx) * 0.03 * alpha;
-        n.ty += (4 - n.ty) * 0.03 * alpha;
-      }
-      for (let i = 0; i < nodes.length; i++) {
-        const a = nodes[i];
-        if (a._hide || a.tx === undefined) continue;
-        const ax0 = a.x + a.tx, ax1 = ax0 + a.label.length * 6.2, ay0 = a.y + a.ty - 7, ay1 = a.y + a.ty + 7;
-        for (let j = i + 1; j < nodes.length; j++) {
-          const b = nodes[j];
-          if (b._hide || b.tx === undefined) continue;
-          const bx0 = b.x + b.tx, bx1 = bx0 + b.label.length * 6.2, by0 = b.y + b.ty - 7, by1 = b.y + b.ty + 7;
-          const ox = Math.min(ax1, bx1) - Math.max(ax0, bx0);
-          if (ox <= 0) continue;
-          const oy = Math.min(ay1, by1) - Math.max(ay0, by0);
-          if (oy <= 0) continue;
-          if (oy < ox + 6) {
-            const push = (oy / 2 + 1) * k;
-            const dir = ((ay0 + ay1) / 2 <= (by0 + by1) / 2) ? -1 : 1;
-            a.ty += dir * push; b.ty -= dir * push;
-          } else {
-            const push = (ox / 2 + 1) * k;
-            const dir = ((ax0 + ax1) / 2 <= (bx0 + bx1) / 2) ? -1 : 1;
-            a.tx += dir * push; b.tx -= dir * push;
-          }
-        }
-      }
-    }
-    force.initialize = (_) => { nodes = _; };
-    force.enabled = (v) => { if (v === undefined) return enabled; enabled = v; };
-    return force;
-  }
-  const lForce = labelForce();
 
   const sim = d3.forceSimulation(DATA.nodes)
     .force('link', d3.forceLink(DATA.edges).id(d => d.id).distance(90)
@@ -468,7 +459,7 @@ const DATA = __DATA__;
     .force('collide', d3.forceCollide().radius(22))
     .force('anchor', d3.forceX(CX).strength(P.anchor))
     .force('spread', tForce)
-    .force('labels', lForce)
+    .force('rank', d3.forceY(d => rankY(d)).strength(P.rank))
     .force('yc', d3.forceY(CY).strength(0.06));
   DATA.nodes.forEach((n, i) => {
     n.x = n.t == null ? CX + ((i % 9) - 4) * 8 : CX + (n.t - 0.5) * W * 0.7;
@@ -493,16 +484,13 @@ const DATA = __DATA__;
     })
     .on('mouseout', () => { document.getElementById('tip').style.display = 'none'; });
   node.append('circle').attr('r', 9).attr('fill', d => kindColor(d.kind)).attr('stroke', '#333');
-  node.append('text').attr('font-size', 11).text(d => d.label);
+  node.append('text').attr('dx', 12).attr('dy', 4).attr('font-size', 11).text(d => d.label);
   svg.on('click', () => select(null));
 
   sim.on('tick', () => {
     link.attr('x1', e => e.source.x).attr('y1', e => e.source.y)
         .attr('x2', e => e.target.x).attr('y2', e => e.target.y);
     node.attr('transform', d => `translate(${d.x},${d.y})`);
-    node.select('text')
-        .attr('x', d => d.tx === undefined ? 12 : d.tx)
-        .attr('y', d => d.ty === undefined ? 4 : d.ty);
   });
 
   const fileLangs = [...new Set(DATA.nodes.filter(n => n.kind === 'File').map(n => n.language || 'unknown'))];
@@ -528,7 +516,6 @@ const DATA = __DATA__;
     node.style('display', d => keepN.has(d) ? null : 'none');
     link.style('display', e => keepE.includes(e) ? null : 'none');
     node.classed('dim', d => !(d.t == null || (d.t >= lo && d.t <= hi)));
-    DATA.nodes.forEach(n => { n._hide = !keepN.has(n); });
     sim.nodes([...keepN]);
     sim.force('link').links(keepE);
     sim.alpha(0.5).restart();
@@ -574,11 +561,10 @@ const DATA = __DATA__;
   document.getElementById('lpull').oninput = ev => { P.link = +ev.target.value / 100; sim.alpha(0.4).restart(); };
   document.getElementById('hier').oninput = ev => { P.hierMult = +ev.target.value / 100; sim.alpha(0.4).restart(); };
   document.getElementById('charge').oninput = ev => { sim.force('charge').strength(-ev.target.value); sim.alpha(0.4).restart(); };
-  document.getElementById('labspread').oninput = ev => { P.label = +ev.target.value / 100; sim.alpha(0.4).restart(); };
+  document.getElementById('rank').oninput = ev => { P.rank = +ev.target.value / 100; sim.force('rank').strength(P.rank); sim.alpha(0.4).restart(); };
   document.getElementById('labels').onchange = ev => { showLabels = ev.target.checked; paint(); };
   document.getElementById('bytime').onchange = ev => { colorByTime = ev.target.checked; paint(); };
   document.getElementById('filecolors').onchange = ev => { fileTypeColors = ev.target.checked; paint(); };
-  document.getElementById('nolap').onchange = ev => { lForce.enabled(ev.target.checked); sim.alpha(0.4).restart(); };
   document.getElementById('find').onclick = () => {
     const q = document.getElementById('search').value.toLowerCase();
     const hit = DATA.nodes.find(n => n.label.toLowerCase().includes(q));

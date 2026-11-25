@@ -484,6 +484,47 @@ def test_map_registry_and_assignments_cover_topics_and_about_edges():
     assert "no derived topic" in linked.skipped[0]
 
 
+def test_map_folders_creates_hierarchy_with_repo_root():
+    from repo_history.graph import BELONGS_TO, HAS_BRANCH, map_folders, map_repository_branches
+
+    mapped = map_folders(
+        ["models/gcn.py", "models/graphnet.py", "docs/guide.md", "README.md"],
+        ids(), run_id=RUN_ID, window_start=WINDOW.start,
+    )
+    by_id = {entity.logical_id: entity for entity in mapped.entities}
+    folders = {nid for nid, entity in by_id.items() if entity.labels == ("Folder",)}
+    assert len(folders) == 2
+    assert by_id[ids().repository_id].labels == ("Repository",)
+    folders_by_path = {
+        entity.properties["path"]: nid
+        for nid, entity in by_id.items()
+        if entity.labels == ("Folder",)
+    }
+    assert set(folders_by_path) == {"models", "docs"}
+    belongs = [edge for edge in mapped.relationships if edge.edge_type == BELONGS_TO]
+    assert {(edge.source, edge.target) for edge in belongs} == {
+        (ids().file("models/gcn.py"), folders_by_path["models"]),
+        (ids().file("models/graphnet.py"), folders_by_path["models"]),
+        (ids().file("docs/guide.md"), folders_by_path["docs"]),
+    }
+    assert all(edge.properties.get("hierarchical") is True for edge in belongs)
+
+    nested = map_folders(["a/b/c.py"], ids(), run_id=RUN_ID, window_start=WINDOW.start)
+    nested_folders = {
+        entity.properties["path"] for entity in nested.entities if entity.labels == ("Folder",)
+    }
+    assert nested_folders == {"a", "a/b"}
+    assert nested.entities[0].labels == ("Repository",)
+
+    branches = map_repository_branches(["main", "feat"], ids(), run_id=RUN_ID, window_start=WINDOW.start)
+    assert all(edge.edge_type == HAS_BRANCH for edge in branches.relationships)
+    assert {(edge.source, edge.target) for edge in branches.relationships} == {
+        (ids().repository_id, ids().branch("feat")),
+        (ids().repository_id, ids().branch("main")),
+    }
+    assert all(edge.properties.get("hierarchical") is True for edge in branches.relationships)
+
+
 def test_about_and_touches_edges_persist_and_count(tmp_path):
     boundary = commit("b" * 40, committed_at=T0)
     tip = commit("c" * 40, parents=(boundary.sha,), committed_at=DAY_ONE)

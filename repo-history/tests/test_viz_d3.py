@@ -266,6 +266,37 @@ def test_unobserved_branches_become_placeholders():
     assert all(edge["target"] != missing for edge in dropped["edges"])
 
 
+def test_extra_structural_nodes_join_with_folder_times():
+    from repo_history.graph import map_folders
+
+    mapped = map_folders(
+        ["docs/guide.md", "docs/other.md"],
+        ids(), run_id=RUN_ID, window_start=WINDOW.start,
+    )
+    kinds = {entity.logical_id: entity.labels for entity in mapped.entities}
+    assert kinds[ids().repository_id] == ("Repository",)
+    assert set(kinds) == {ids().repository_id, stable_folder_id("docs")}
+    targets = {(edge.source, edge.target) for edge in mapped.relationships}
+    assert (ids().file("docs/guide.md"), stable_folder_id("docs")) in targets
+    assert (ids().file("docs/other.md"), stable_folder_id("docs")) in targets
+    assert all(edge.properties.get("hierarchical") is True for edge in mapped.relationships)
+
+    data = build_viewer_data(
+        **fixture_inputs(extra_nodes=tuple(mapped.entities), max_nodes=200)
+    )
+    by_id = {node["id"]: node for node in data["nodes"]}
+    assert by_id[stable_folder_id("docs")]["kind"] == "Folder"
+    assert by_id[stable_folder_id("docs")]["t"] == 1.0
+    assert by_id[ids().repository_id]["kind"] == "Repository"
+    assert by_id[ids().repository_id]["t"] is None
+
+
+def stable_folder_id(path: str) -> str:
+    from repo_history.ids import stable_id
+
+    return stable_id("folder", ids().repository_id, path)
+
+
 def writes_edge(
     source: str, target: str, edge_type: str, origin: str = "git",
 ) -> RelationshipWrite:
@@ -354,15 +385,16 @@ def test_file_nodes_carry_a_distinguishing_language():
     assert by_id[ids().file("docs/guide.md")]["kind"] == "File"
 
 
-def test_viewer_page_has_label_hierarchy_and_file_controls():
+def test_viewer_page_has_hierarchy_file_and_time_controls():
     html = render_viewer_html(build_viewer_data(**fixture_inputs()))
 
-    for control in ("hier", "labspread", "lpull", "filecolors", "nolap"):
+    for control in ("hier", "rank", "lpull", "filecolors", "tmin", "tmax"):
         assert f'id="{control}"' in html
-    for hook in ("labelForce", "hierMult", "langColor", "fileTypeColors", "lForce.enabled"):
+    for hook in ("TIERS", "rankY", "hierMult", "langColor", "fileTypeColors"):
         assert hook in html
+    for gone in ("labelForce", "lForce.enabled", "labspread", "nolap", "separate labels"):
+        assert gone not in html
     assert "color files by type" in html
-    assert "separate labels" in html
 
 
 def test_export_is_deterministic():

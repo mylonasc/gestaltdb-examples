@@ -355,26 +355,29 @@ omissions reported, and the footer records run, horizon, counts, and gaps.
 `examples/build_viewer.py` exports the live slice to `examples/graph.json`
 and writes `examples/viewer.html`, a self-contained page (D3 loaded from
 CDN, with an offline data-table fallback) with a force-directed layout whose
-x-axis is time. All edge kinds are included — `PARENT_COMMIT`, `TIP_OF`,
-`TOUCHES`, `CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`, `RELATED_TO`
-(provider and inferred), and `ABOUT` (topic assignments; snapshot
-occurrences aggregate to their file, as the page footer notes) — while
-`MEMBER_OF`/`OF_FILE` snapshot granularity stays folded into `TOUCHES`:
+x-axis is time and whose y-axis follows the entity hierarchy
+(Repository → Branch → WorkItem → Commit → Topic → Folder → File). All edge
+kinds are included — `PARENT_COMMIT`, `TIP_OF`, `TOUCHES`, `IMPORTS`
+(intra-repo Python imports), `CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`,
+`RELATED_TO` (provider and inferred), `BELONGS_TO`, `HAS_BRANCH`, and `ABOUT`
+(topic assignments; snapshot occurrences aggregate to their file, as the
+page footer notes) — while `MEMBER_OF`/`OF_FILE` snapshot granularity stays
+folded into `TOUCHES`:
 
 - every timestamped node is normalized to `t` in `[0, 1]` across the graph;
   an anchor force pulls every node toward the mid-time center while a second
   force pulls left/right with strength growing with `|t - 0.5|`, so the plot
   elongates along time as nodes appear.
-- a soft label-separation force nudges overlapping captions apart (toggleable,
-  strength adjustable) instead of moving nodes.
-- hierarchical edges (`PARENT_COMMIT`, `TOUCHES`, `TIP_OF`, `CHILD_OF`, …)
-  pull harder than associative ones via a per-link strength multiplier
-  (configurable `hierarchical pull` slider).
+- a rank force pulls each kind toward its hierarchy tier (configurable
+  `hierarchy pull` slider); hierarchical edges (`PARENT_COMMIT`, `TOUCHES`,
+  `TIP_OF`, `BELONGS_TO`, …) also pull harder than associative ones via a
+  per-link strength multiplier (`hierarchical pull` slider).
 - files are colored by detected type (source vs docs vs other, toggleable
-  legend) instead of a single file color.
-- nodes without timestamps (deleted branches, unobserved tips) stay centered
-  with no time pull; snapshot occurrences aggregate to file nodes and remote
-  tracking refs resolve to PR head branches.
+  legend) instead of a single file color; folders group files by directory
+  under a single repository root.
+- nodes without timestamps (deleted branches, unobserved tips, the repository
+  root) stay centered with no time pull; snapshot occurrences aggregate to
+  file nodes and remote tracking refs resolve to PR head branches.
 - interactions: drag, zoom/pan, hover tooltips, click-to-focus neighborhoods
   with provenance and evidence, kind/edge-type filters, label and time-color
   toggles, a time-window dimmer, text search, pause/reset, and sliders for

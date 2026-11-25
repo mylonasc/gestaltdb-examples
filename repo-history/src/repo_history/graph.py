@@ -42,7 +42,9 @@ from .protocols import GraphSink as GraphSinkProtocol
 
 __all__ = [
     "ABOUT",
+    "BELONGS_TO",
     "CHILD_OF",
+    "HAS_BRANCH",
     "HAS_LABEL",
     "IMPORTS",
     "MEMBER_OF",
@@ -63,20 +65,24 @@ __all__ = [
     "VersionRecord",
     "WriteReport",
     "map_discovery",
+    "map_folders",
     "map_git_index",
     "map_imports",
     "map_registry",
+    "map_repository_branches",
     "map_topic_assignments",
 ]
 
 # Edge types used by typed traversal.  The driver reads the edge type from
 # the ``type`` property, so the sink always sets it.
 ABOUT = "ABOUT"
+BELONGS_TO = "BELONGS_TO"
 PARENT_COMMIT = "PARENT_COMMIT"
 MEMBER_OF = "MEMBER_OF"
 OF_FILE = "OF_FILE"
 TOUCHES = "TOUCHES"
 IMPORTS = "IMPORTS"
+HAS_BRANCH = "HAS_BRANCH"
 HAS_LABEL = "HAS_LABEL"
 CHILD_OF = "CHILD_OF"
 TIP_OF = "TIP_OF"
@@ -86,7 +92,7 @@ MERGED_AS = "MERGED_AS"
 #: writes with ``properties["hierarchical"] = True``; the visualizer pulls
 #: them harder than associative edges (configurably).
 HIERARCHICAL_EDGE_TYPES = frozenset(
-    {PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, TIP_OF, CHILD_OF}
+    {PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, TIP_OF, CHILD_OF, BELONGS_TO, HAS_BRANCH}
 )
 
 NODE_INDEXES = ("sha", "path", "number", "name", "prov_run_id")
@@ -801,6 +807,113 @@ def map_imports(
     return MappedGraph(relationships=tuple(relationships), skipped=skipped)
 
 
+def map_folders(
+    paths: Sequence[str], ids: IdFactory, *, run_id: str, window_start: datetime
+) -> MappedGraph:
+    """Map directory structure to ``Folder`` entities and a ``Repository`` root.
+
+    Every distinct parent directory of the given file paths becomes a Folder
+    (nested paths included, so ``a/b/c.py`` yields ``a`` and ``a/b``); each
+    file gets a hierarchical ``BELONGS_TO`` edge and each branch a
+    hierarchical ``HAS_BRANCH`` edge from the single repository node.
+    """
+
+    entities: list[EntityWrite] = []
+    relationships: list[RelationshipWrite] = []
+    folders: dict[str, set[str]] = {}
+    for path in sorted(set(paths)):
+        parts = path.split("/")[:-1]
+        for depth in range(1, len(parts) + 1):
+            folders.setdefault("/".join(parts[:depth]), set()).add(path)
+    repository_id = ids.repository_id
+    entities.append(
+        EntityWrite(
+            logical_id=repository_id,
+            labels=("Repository",),
+            properties={"url": ids.repository_url},
+            valid_from=window_start,
+            origin="git",
+            origin_id="repository",
+            event_id=stable_id("graph-write", ids.repository_id, "repository"),
+            run_id=run_id,
+            info_horizon=window_start,
+            evidence_ids=(),
+        )
+    )
+    for folder in sorted(folders):
+        folder_id = stable_id("folder", ids.repository_id, folder)
+        members = sorted(folders[folder])
+        entities.append(
+            EntityWrite(
+                logical_id=folder_id,
+                labels=("Folder",),
+                properties={
+                    "path": folder,
+                    "depth": folder.count("/") + 1,
+                    "file_count": len(members),
+                },
+                valid_from=window_start,
+                origin="git",
+                origin_id=f"folder:{folder}",
+                event_id=stable_id("graph-write", ids.repository_id, "folder", folder),
+                run_id=run_id,
+                info_horizon=window_start,
+                evidence_ids=(),
+            )
+        )
+        for member in members:
+            relationships.append(
+                RelationshipWrite(
+                    edge_id=stable_id(
+                        "edge", ids.repository_id, BELONGS_TO, member, folder
+                    ),
+                    edge_type=BELONGS_TO,
+                    source=ids.file(member),
+                    target=folder_id,
+                    properties={"hierarchical": True},
+                    valid_from=window_start,
+                    origin="git",
+                    origin_id=f"{member}:{folder}",
+                    event_id=stable_id(
+                        "graph-write", ids.repository_id, "git-belongs-to",
+                        member, folder,
+                    ),
+                    run_id=run_id,
+                    info_horizon=window_start,
+                    evidence_ids=(),
+                )
+            )
+    return MappedGraph(entities=tuple(entities), relationships=tuple(relationships))
+
+
+def map_repository_branches(
+    branch_names: Sequence[str], ids: IdFactory, *, run_id: str, window_start: datetime
+) -> MappedGraph:
+    """Link observed branches to the repository root with ``HAS_BRANCH`` edges."""
+
+    relationships: list[RelationshipWrite] = []
+    for name in sorted(set(branch_names)):
+        relationships.append(
+            RelationshipWrite(
+                edge_id=stable_id("edge", ids.repository_id, HAS_BRANCH, name),
+                edge_type=HAS_BRANCH,
+                source=ids.repository_id,
+                target=ids.branch(name),
+                properties={"hierarchical": True},
+                valid_from=window_start,
+                origin="git",
+                origin_id=f"repository:{name}",
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "git-has-branch", name
+                ),
+                run_id=run_id,
+                info_horizon=window_start,
+                evidence_ids=(),
+            )
+        )
+    return MappedGraph(relationships=tuple(relationships))
+
+
 # ---------------------------------------------------------------------------
 # Single-writer sink
 # ---------------------------------------------------------------------------
@@ -1202,9 +1315,9 @@ class GraphSink(GraphSinkProtocol):
         self._ensure_ready()
         if edge_types is None:
             edge_types = (
-                ABOUT, PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, IMPORTS, HAS_LABEL,
-                CHILD_OF, TIP_OF, MERGED_AS, "MENTIONS", "INTENDS_TO_RESOLVE",
-                "CLOSED_BY", "RELATED_TO",
+                ABOUT, PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, IMPORTS,
+                HAS_BRANCH, BELONGS_TO, HAS_LABEL, CHILD_OF, TIP_OF, MERGED_AS,
+                "MENTIONS", "INTENDS_TO_RESOLVE", "CLOSED_BY", "RELATED_TO",
             )
         return {edge_type: self._db.count_edges_by_type(edge_type) for edge_type in edge_types}
 

@@ -20,7 +20,7 @@ from .content import ContentIndex, detect_language
 from .git import GitIndex
 from .github import GitHubDiscovery
 from .graph import HIERARCHICAL_EDGE_TYPES, EntityWrite, RelationshipWrite
-from .ids import IdFactory
+from .ids import IdFactory, stable_id
 from .labeling import TopicAssignment
 from .linking import LinkRecord, LinkRelation
 from .models import ensure_utc
@@ -194,24 +194,77 @@ def build_viewer_data(
             "rationale": str(write.properties.get("rationale", write.edge_type)),
             "evidence": len(write.evidence_ids),
         })
-    # Commit-to-file touches stay aggregated at file level: the index keeps
-    # per-commit diffs, but the viewer draws one edge per touched file.
-    for snapshot in index.snapshots:
-        if snapshot.commit_sha not in commit_times:
+    # Diffs are the hinge of the model: only commits with an actual change
+    # record touch a file, via commit -> Diff (TOUCHES) and Diff -> file
+    # (CHANGES).  Unchanged snapshot entries never produce edges, so a
+    # commit that merely carries a file forward does not touch it.
+    seen_diffs: set[str] = set()
+    for change in sorted(index.changes, key=lambda item: (item.commit_sha, item.path)):
+        moment = commit_times.get(change.commit_sha)
+        if moment is None:
             continue
+        diff_id = stable_id("diff", ids.repository_id, change.commit_sha, change.path)
+        if diff_id in nodes or diff_id in seen_diffs:
+            pass
+        else:
+            seen_diffs.add(diff_id)
+            preview = ""
+            snap_id = next(
+                (
+                    snap.snapshot_id
+                    for snap in content.snapshots
+                    if snap.commit_sha == change.commit_sha and snap.path == change.path
+                ),
+                None,
+            )
+            parsed = content.content_for(snap_id) if snap_id else None
+            if parsed is not None and parsed.text:
+                preview = "\n".join(parsed.text.splitlines()[:30])[:1500]
+            short_path = change.path.rsplit("/", 1)[-1]
+            add(
+                diff_id, "Diff", f"{short_path}@{change.commit_sha[:8]}"[-34:],
+                title=f"{change.path} @ {change.commit_sha[:8]} [{change.status}]",
+                time=_iso(moment),
+                props={
+                    "commit_sha": change.commit_sha,
+                    "path": change.path,
+                    "old_path": change.old_path,
+                    "status": change.status,
+                    "old_oid": change.old_oid,
+                    "new_oid": change.new_oid,
+                    "definition_url": change.source_url,
+                    "preview": preview,
+                },
+                prov={"method": "git-changes", "run_id": run_id,
+                      "horizon": info_horizon.isoformat()},
+            )
+            times[diff_id] = moment
         extra.append({
-            "source": canonical_endpoint(ids.commit(snapshot.commit_sha)),
-            "target": canonical_endpoint(ids.file(snapshot.path)),
+            "source": canonical_endpoint(ids.commit(change.commit_sha)),
+            "target": diff_id,
             "relation": "TOUCHES",
             "hierarchical": True,
             "inferred": False,
-            "rationale": "commit touches file (diffs folded)",
+            "rationale": f"commit touches diff [{change.status}]",
+            "evidence": 0,
+        })
+        extra.append({
+            "source": diff_id,
+            "target": canonical_endpoint(ids.file(change.path)),
+            "relation": "CHANGES",
+            "hierarchical": True,
+            "inferred": False,
+            "rationale": f"diff changes file [{change.status}]",
             "evidence": 0,
         })
 
-    path_of_id = {
+    path_of_id: dict[str, str] = {
         ids.file(snapshot.path): snapshot.path for snapshot in content.snapshots
     }
+    for entry in index.snapshots:
+        path_of_id.setdefault(ids.file(entry.path), entry.path)
+    for change in index.changes:
+        path_of_id.setdefault(ids.file(change.path), change.path)
     file_targets = {
         link.target_id
         for link in links
@@ -228,6 +281,16 @@ def build_viewer_data(
         moment = commit_times.get(snapshot.commit_sha)
         if moment is not None:
             file_times.setdefault(ids.file(snapshot.path), []).append(moment)
+    # Per-file change history lists only direct changers (actual change
+    # records), not every commit whose snapshot merely carries the file.
+    changes_by_path: dict[str, list[tuple[datetime, str, str]]] = {}
+    for change in index.changes:
+        moment = commit_times.get(change.commit_sha)
+        if moment is None:
+            continue
+        changes_by_path.setdefault(change.path, []).append(
+            (moment, change.commit_sha, change.status)
+        )
     for file_id in sorted(file_targets):
         path = path_of_id.get(file_id)
         if path is None:
@@ -237,13 +300,7 @@ def build_viewer_data(
         if first_seen is not None:
             times[file_id] = first_seen
         language = detect_language(path)
-        history = sorted(
-            {
-                (commit_times[entry.commit_sha], entry.commit_sha, entry.content_status)
-                for entry in index.snapshots
-                if entry.path == path and entry.commit_sha in commit_times
-            }
-        )
+        history = sorted(set(changes_by_path.get(path, [])))
         preview = ""
         candidates = [
             entry for entry in index.snapshots if entry.path == path
@@ -324,6 +381,12 @@ def build_viewer_data(
         if kind == "Class":
             label = str(write.properties.get("name", write.logical_id))
             title = str(write.properties.get("qualname", label))
+        elif kind == "Diff":
+            diff_path = str(write.properties.get("path", write.logical_id))
+            short = diff_path.rsplit("/", 1)[-1]
+            commit = str(write.properties.get("commit_sha", ""))[:8]
+            label = f"{short}@{commit}"
+            title = f"{diff_path} [{write.properties.get('status', '')}]"
         else:
             label = str(write.properties.get("path", write.properties.get("name", write.logical_id)))
             title = label
@@ -416,8 +479,9 @@ def build_viewer_data(
             "max_nodes": max_nodes,
             "repository": {"name": repository_name, "url": repository_url},
             "notes": (
-                "Snapshot occurrences aggregate to file nodes; "
-                "MEMBER_OF/OF_FILE snapshot granularity is folded into TOUCHES. "
+                "Commits reach files only through diffs: TOUCHES is commit->diff "
+                "and CHANGES is diff->file, built from actual change records. "
+                "Unchanged snapshot entries never produce touches. "
                 "Folder nodes group files by directory; the repository node roots branches. "
                 "Node time t is anchored to the demo window (out-of-window evidence clamps "
                 "to the edges)."
@@ -503,7 +567,7 @@ const DATA = __DATA__;
   // --- temporal forces: anchor pulls every x to mid-time center; ---
   // --- spread pulls left/right with strength growing from mid-time. ---
   const P = { anchor: 0.06, base: 0.015, far: 0.14, gamma: 1.0, link: 0.25, hierMult: 1.6, rank: 0.12 };
-  const TIERS = { Repository: 0, Branch: 1, WorkItem: 2, Commit: 3, Topic: 4, Folder: 5, File: 6, Class: 7 };
+  const TIERS = { Repository: 0, Branch: 1, WorkItem: 2, Commit: 3, Topic: 4, Diff: 5, Folder: 6, File: 7, Class: 8 };
   function temporalForce() {
     let nodes = [];
     function force(alpha) {
@@ -537,8 +601,8 @@ const DATA = __DATA__;
   });
 
   const link = g.append('g').selectAll('line').data(DATA.edges).join('line')
-    .attr('stroke', e => e.inferred ? '#9e6a03' : (['PARENT_COMMIT', 'MEMBER_OF', 'OF_FILE', 'TIP_OF', 'TOUCHES', 'BELONGS_TO', 'HAS_BRANCH', 'HAS_FOLDER', 'DEFINED_AT'].includes(e.relation) ? '#8b949e' : '#1f6feb'))
-    .attr('stroke-width', e => ['PARENT_COMMIT', 'TIP_OF', 'TOUCHES', 'BELONGS_TO'].includes(e.relation) ? 1 : 2)
+    .attr('stroke', e => e.inferred ? '#9e6a03' : (['PARENT_COMMIT', 'MEMBER_OF', 'OF_FILE', 'TIP_OF', 'TOUCHES', 'CHANGES', 'BELONGS_TO', 'HAS_BRANCH', 'HAS_FOLDER', 'DEFINED_AT', 'CHILD_OF'].includes(e.relation) ? '#8b949e' : '#1f6feb'))
+    .attr('stroke-width', e => ['PARENT_COMMIT', 'TIP_OF', 'TOUCHES', 'CHANGES', 'BELONGS_TO'].includes(e.relation) ? 1 : 2)
     .attr('stroke-dasharray', e => e.inferred ? '5,3' : null);
   link.append('title').text(e => e.relation + (e.rationale ? ': ' + e.rationale : ''));
   const node = g.append('g').selectAll('g').data(DATA.nodes).join('g')

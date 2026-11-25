@@ -462,30 +462,55 @@ def test_viewer_page_has_hierarchy_file_and_time_controls():
     assert "color files by type" in html
 
 
-def test_viewer_synthesizes_commit_file_touches_and_file_details():
-    from repo_history.git import TreeEntryRecord
+def test_viewer_synthesizes_commit_diff_file_chain_and_file_details():
+    from repo_history.git import FileChangeRecord, TreeEntryRecord
 
     arguments = fixture_inputs()
     index = arguments["index"]
-    arguments["index"] = index.model_copy(update={"snapshots": (
-        TreeEntryRecord(
-            snapshot_id="snap:guide", commit_sha=TIP, path="docs/guide.md",
-            object_id="o" * 40, mode=0o100644, kind="blob", size=10,
-            is_binary=False, is_lfs_pointer=False, content_status="inspected",
-            source_url="u",
+    arguments["index"] = index.model_copy(update={
+        "snapshots": (
+            TreeEntryRecord(
+                snapshot_id="snap:guide", commit_sha=TIP, path="docs/guide.md",
+                object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+                is_binary=False, is_lfs_pointer=False, content_status="inspected",
+                source_url="u",
+            ),
         ),
-    )})
+        "changes": (
+            FileChangeRecord(
+                change_id="change:1", commit_sha=TIP, parent_sha=MID,
+                comparison="first-parent", path="docs/guide.md",
+                status="modified", source_url="u",
+            ),
+        ),
+    })
     data = build_viewer_data(**arguments)
+    from repo_history.ids import stable_id
+    diff_id = stable_id("diff", ids().repository_id, TIP, "docs/guide.md")
 
     touches = [
         edge for edge in data["edges"]
         if edge["relation"] == "TOUCHES"
         and edge["source"] == ids().commit(TIP)
-        and edge["target"] == ids().file("docs/guide.md")
+        and edge["target"] == diff_id
     ]
     assert len(touches) == 1
     assert touches[0]["hierarchical"] is True
     assert touches[0]["inferred"] is False
+    changes = [
+        edge for edge in data["edges"]
+        if edge["relation"] == "CHANGES"
+        and edge["source"] == diff_id
+        and edge["target"] == ids().file("docs/guide.md")
+    ]
+    assert len(changes) == 1
+    # No direct commit->file TOUCHES remain: files are only reached via diffs.
+    assert not [
+        edge for edge in data["edges"]
+        if edge["relation"] == "TOUCHES"
+        and edge["source"] == ids().commit(TIP)
+        and edge["target"] == ids().file("docs/guide.md")
+    ]
 
     by_id = {node["id"]: node for node in data["nodes"]}
     doc = by_id[ids().file("docs/guide.md")]
@@ -493,6 +518,29 @@ def test_viewer_synthesizes_commit_file_touches_and_file_details():
     assert doc["t"] is not None
     assert doc["props"]["history"]
     assert doc["props"]["preview"].startswith("# Guide")
+
+
+def test_viewer_omits_touches_for_unchanged_carry_forward():
+    from repo_history.git import TreeEntryRecord
+
+    arguments = fixture_inputs()
+    index = arguments["index"]
+    # Snapshot present in TIP but no change record: merely carried forward.
+    arguments["index"] = index.model_copy(update={
+        "snapshots": (
+            TreeEntryRecord(
+                snapshot_id="snap:guide", commit_sha=TIP, path="docs/guide.md",
+                object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+                is_binary=False, is_lfs_pointer=False, content_status="inspected",
+                source_url="u",
+            ),
+        ),
+        "changes": (),
+    })
+    data = build_viewer_data(**arguments)
+
+    assert not [e for e in data["edges"] if e["relation"] in ("TOUCHES", "CHANGES")]
+    assert not [n for n in data["nodes"] if n["kind"] == "Diff"]
 
 
 def test_class_nodes_rank_below_files_and_carry_qualified_names():

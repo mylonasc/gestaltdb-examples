@@ -428,6 +428,74 @@ def test_map_diffs_links_commits_to_files_through_diff_nodes():
     assert all(edge.properties.get("hierarchical") is True for edge in mapped.relationships)
 
 
+def test_map_diffs_ignores_unchanged_snapshots_and_covers_deletions():
+    from repo_history.content import ParsedContent
+    from repo_history.git import TreeEntryRecord
+
+    tip, base = "c" * 40, "b" * 40
+    content = ContentIndex(
+        contents=(
+            ParsedContent(
+                content_id="c:x", blob_id="b:x", oid="o" * 40, media_type="text",
+                status="parsed", text="hello\n",
+            ),
+        ),
+        snapshots=(
+            SnapshotContent(
+                snapshot_id="snap:tip", commit_sha=tip, path="x.py",
+                oid="o" * 40, content_id="c:x", status="parsed",
+                media_type="text", language="text", module=None,
+                is_baseline=False, source_url="u",
+            ),
+            SnapshotContent(
+                snapshot_id="snap:base", commit_sha=base, path="x.py",
+                oid="o" * 40, content_id="c:x", status="parsed",
+                media_type="text", language="text", module=None,
+                is_baseline=True, source_url="u",
+            ),
+        ),
+    )
+    # Unchanged carry-forward: snapshots exist in both commits but no change.
+    index = GitIndex(
+        selection=selection(
+            (commit(tip, parents=(base,), committed_at=DAY_ONE),),
+            (commit(base, committed_at=T0),),
+        ),
+        snapshots=(
+            TreeEntryRecord(
+                snapshot_id="snap:tip", commit_sha=tip, path="x.py",
+                object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+                is_binary=False, is_lfs_pointer=False, content_status="inspected",
+                source_url="u",
+            ),
+            TreeEntryRecord(
+                snapshot_id="snap:base", commit_sha=base, path="x.py",
+                object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+                is_binary=False, is_lfs_pointer=False, content_status="inspected",
+                is_baseline=True, source_url="u",
+            ),
+        ),
+        changes=(),
+    )
+    assert map_diffs(content, index, ids(), run_id=RUN_ID).entities == ()
+
+    # Deletion-only change: no snapshot for the path in the changing commit,
+    # but the diff and both edges still exist.
+    deleted = index.model_copy(update={"changes": (
+        FileChangeRecord(
+            change_id="change:del", commit_sha=tip, parent_sha=base,
+            comparison="first-parent", path="old.py", status="deleted",
+            old_oid="d" * 40, source_url="u",
+        ),
+    )})
+    mapped = map_diffs(content, deleted, ids(), run_id=RUN_ID)
+    assert len(mapped.entities) == 1
+    assert mapped.entities[0].properties["status"] == "deleted"
+    assert mapped.entities[0].properties["preview"] == ""
+    kinds = sorted(edge.edge_type for edge in mapped.relationships)
+    assert kinds == [CHANGES, TOUCHES]
+
+
 def test_map_imports_resolves_absolute_relative_and_package_imports():
     from repo_history.content import CodeDocument, ImportRecord, ParsedContent
     from repo_history.git import TreeEntryRecord
@@ -685,6 +753,13 @@ def test_about_and_diff_edges_persist_and_count(tmp_path):
     boundary = commit("b" * 40, committed_at=T0)
     tip = commit("c" * 40, parents=(boundary.sha,), committed_at=DAY_ONE)
     index = git_index(selection((tip,), (boundary,)))
+    index = index.model_copy(update={"changes": (
+        FileChangeRecord(
+            change_id="change:tip:x", commit_sha=tip.sha, parent_sha=boundary.sha,
+            comparison="first-parent", path="x.py", status="added",
+            new_oid="o" * 40, source_url=f"{REPOSITORY_URL}/blob/{tip.sha}/x.py",
+        ),
+    )})
     mapped = map_git_index(index, ids(), run_id=RUN_ID)
     registry = seed_registry(at=NOW)
     registry, topic = registry.register(
@@ -727,9 +802,9 @@ def test_about_and_diff_edges_persist_and_count(tmp_path):
     )
 
     assert sink.label_counts()["Topic"] == 1
-    assert sink.label_counts()["Diff"] == 2
-    assert sink.edge_counts()["TOUCHES"] == 2
-    assert sink.edge_counts()["CHANGES"] == 2
+    assert sink.label_counts()["Diff"] == 1
+    assert sink.edge_counts()["TOUCHES"] == 1
+    assert sink.edge_counts()["CHANGES"] == 1
     assert sink.edge_counts()["ABOUT"] == 1
     found = sink.find_nodes("Topic", "name", "sparse-training")
     assert len(found) == 1

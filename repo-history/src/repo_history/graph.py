@@ -1009,12 +1009,12 @@ def map_diffs(
 ) -> MappedGraph:
     """Index file changes as ``Diff`` entities between commits and files.
 
-    Each ``(commit, path)`` snapshot becomes one Diff carrying the change
-    status (added/modified/deleted/renamed, or ``present`` when no change
-    record exists, e.g. boundary snapshots), the old/new blob IDs, and a
-    bounded text preview.  Commits reach files only through diffs:
-    ``TOUCHES`` edges run commit to diff, and ``CHANGES`` edges run diff to
-    file.  Both are hierarchical; nothing here is invented.
+    Only actual ``index.changes`` records become Diffs — one per
+    ``(commit, path)`` change, including deletions that have no snapshot in
+    the changing commit.  Unchanged snapshot entries never produce Diffs.
+    Commits reach files only through diffs: ``TOUCHES`` edges run commit to
+    diff, and ``CHANGES`` edges run diff to file.  Both are hierarchical;
+    nothing here is invented.
     """
 
     entities: list[EntityWrite] = []
@@ -1024,73 +1024,74 @@ def map_diffs(
         record.sha: record.committed_at
         for record in (*index.selection.selected_commits, *index.selection.boundary_commits)
     }
-    changes_by_key = {(change.commit_sha, change.path): change for change in index.changes}
     seen: set[str] = set()
+    snapshot_ids_by_key = {
+        (snap.commit_sha, snap.path): snap.snapshot_id for snap in content.snapshots
+    }
 
-    for entry in index.snapshots:
-        committed_at = commit_times.get(entry.commit_sha)
+    for change in sorted(index.changes, key=lambda item: (item.commit_sha, item.path)):
+        committed_at = commit_times.get(change.commit_sha)
         if committed_at is None:
-            skipped.append(f"snapshot:{entry.snapshot_id} without commit time")
+            skipped.append(f"change:{change.change_id} without commit time")
             continue
-        diff_id = stable_id("diff", ids.repository_id, entry.commit_sha, entry.path)
+        diff_id = stable_id("diff", ids.repository_id, change.commit_sha, change.path)
         if diff_id in seen:
             continue
         seen.add(diff_id)
-        change = changes_by_key.get((entry.commit_sha, entry.path))
-        parsed = content.content_for(entry.snapshot_id)
+        snapshot_id = snapshot_ids_by_key.get((change.commit_sha, change.path))
+        parsed = content.content_for(snapshot_id) if snapshot_id else None
         preview = _preview_text(parsed.text if parsed is not None else None)
-        status = change.status if change is not None else "present"
-        old_oid = change.old_oid if change is not None else None
-        new_oid = change.new_oid if change is not None else entry.object_id
         entities.append(
             EntityWrite(
                 logical_id=diff_id,
                 labels=("Diff",),
                 properties={
-                    "commit_sha": entry.commit_sha,
-                    "path": entry.path,
-                    "status": status,
-                    "old_oid": old_oid,
-                    "new_oid": new_oid,
-                    "is_binary": entry.is_binary,
+                    "commit_sha": change.commit_sha,
+                    "path": change.path,
+                    "old_path": change.old_path,
+                    "status": change.status,
+                    "old_oid": change.old_oid,
+                    "new_oid": change.new_oid,
+                    "is_binary": change.is_binary,
                     "preview": preview,
+                    "source_url": change.source_url,
                 },
                 valid_from=committed_at,
                 origin="git",
-                origin_id=f"{entry.commit_sha}:{entry.path}",
+                origin_id=f"{change.commit_sha}:{change.path}",
                 event_id=stable_id(
                     "graph-write", ids.repository_id, "git-diff",
-                    entry.commit_sha, entry.path,
+                    change.commit_sha, change.path,
                 ),
                 run_id=run_id,
                 info_horizon=committed_at,
-                evidence_ids=(ids.evidence("git", entry.commit_sha, entry.source_url),),
+                evidence_ids=(ids.evidence("git", change.commit_sha, change.source_url),),
             )
         )
         for edge_type, source, target, kind in (
-            (TOUCHES, ids.commit(entry.commit_sha), diff_id, "touches"),
-            (CHANGES, diff_id, ids.file(entry.path), "changes"),
+            (TOUCHES, ids.commit(change.commit_sha), diff_id, "touches"),
+            (CHANGES, diff_id, ids.file(change.path), "changes"),
         ):
             relationships.append(
                 RelationshipWrite(
                     edge_id=stable_id(
                         "edge", ids.repository_id, edge_type,
-                        entry.commit_sha, entry.path,
+                        change.commit_sha, change.path,
                     ),
                     edge_type=edge_type,
                     source=source,
                     target=target,
-                    properties={"hierarchical": True, "status": status},
+                    properties={"hierarchical": True, "status": change.status},
                     valid_from=committed_at,
                     origin="git",
-                    origin_id=f"{entry.commit_sha}:{entry.path}:{kind}",
+                    origin_id=f"{change.commit_sha}:{change.path}:{kind}",
                     event_id=stable_id(
                         "graph-write", ids.repository_id, f"git-{kind}",
-                        entry.commit_sha, entry.path,
+                        change.commit_sha, change.path,
                     ),
                     run_id=run_id,
                     info_horizon=committed_at,
-                    evidence_ids=(ids.evidence("git", entry.commit_sha, entry.source_url),),
+                    evidence_ids=(ids.evidence("git", change.commit_sha, change.source_url),),
                 )
             )
     return MappedGraph(entities=tuple(entities), relationships=tuple(relationships), skipped=tuple(skipped))

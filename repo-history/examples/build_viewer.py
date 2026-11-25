@@ -21,8 +21,8 @@ from repo_history.graph import (
     CHILD_OF,
     PARENT_COMMIT,
     TIP_OF,
-    TOUCHES,
     map_classes,
+    map_diffs,
     map_discovery,
     map_folders,
     map_git_index,
@@ -215,6 +215,7 @@ def main() -> None:
         window_start=config.repository.window.start,
     )
     classes = map_classes(content, index, ids, run_id=RUN_ID)
+    diffs = map_diffs(content, index, ids, run_id=RUN_ID)
     data = build_viewer_data(
         index=index, discovery=discovery, content=content,
         links=[*text_report.links, *provider_report.links, *topic_report.links],
@@ -229,8 +230,9 @@ def main() -> None:
             for pull in discovery.pull_requests if pull.base_ref
         },
         extra_edges=[
-            # TOUCHES is synthesized in build_viewer_data from index snapshots
-            # (aggregated commit->file edges; per-commit diffs live in the index).
+            # TOUCHES (commit->diff) and CHANGES (diff->file) also come from
+            # build_viewer_data's change-record synthesis; map_diffs is the
+            # persisted-graph source of the same Diff layer.
             *(r for r in map_git_index(index, ids, run_id=RUN_ID).relationships
               if r.edge_type in (PARENT_COMMIT, TIP_OF)),
             *(r for r in map_discovery(discovery, ids, run_id=RUN_ID).relationships
@@ -240,8 +242,9 @@ def main() -> None:
             *folders.relationships,
             *has_branches.relationships,
             *classes.relationships,
+            *diffs.relationships,
         ],
-        extra_nodes=[*folders.entities, *classes.entities],
+        extra_nodes=[*folders.entities, *classes.entities, *diffs.entities],
     )
     (HERE / "graph.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
     (HERE / "viewer.html").write_text(

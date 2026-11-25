@@ -1,0 +1,66 @@
+{
+ "run_id": "live-eval",
+ "repository_id": "repo:1bc7893d289e5226b4d4c0c1",
+ "repository_url": "https://github.com/mylonasc/tf_gnns",
+ "anchor": "9bfe6c19c02723dbbf101b9e311de684a4728bb1",
+ "window": {
+  "start": "2026-09-13T00:00:00Z",
+  "end": "2026-09-15T00:00:00Z"
+ },
+ "started_at": "2026-11-25T12:32:55.537086Z",
+ "finished_at": "2026-11-25T12:32:58.426962Z",
+ "software_version": "0.1.0",
+ "config_fingerprint": "e6332f9dfe96b4c0e8f1c59a1002e5144ebc29b7a922d3af9fef6ed4c068a232",
+ "selected_commits": [
+  "3eaddf86000fd0a496496c6cb9ade4cbcb7b8adc",
+  "5a59e76e1b39d5de06cb61677bb899837276cc7d",
+  "bafc973e5effb04befb604e3bee9e4865bf62e69",
+  "1dbe18170c48b216434bb68851674795c0f93be0",
+  "8dbca6abc40b63a8a4f57ffdb6cad6d88614cc67",
+  "b4dade7884ab8707d72713ebc0ce5959f7f1e22d",
+  "5042738dd3055f05acfcd5d7ed8f59f713c4dade",
+  "4b510461d37c52966f92df4f801d7c4c098f40f4",
+  "7cd81bd48367c652b6a43d6dddc817bd73397321",
+  "0f05ec009fcc7e244b044273103ccc74546ee883",
+  "f787d50f5bb8fc27b2ed0a0d3a0aa0a729e91eeb",
+  "92d041fb199838cb712462cadb368da4a4186340",
+  "3f7ea9879666c5b04fb5dfec8bab926a26079e42",
+  "7464e12d5751bf6b6bdb9258b05d18163f2369a4",
+  "6324b89cd52dceb9963e44cb5c3e1716dd5a1698",
+  "9bfe6c19c02723dbbf101b9e311de684a4728bb1"
+ ],
+ "selected_work_items": [
+  10,
+  11,
+  12
+ ],
+ "gaps": [
+  {
+   "code": "github-historical-revisions-unavailable",
+   "status": "unavailable",
+   "message": "GitHub REST exposes current issue bodies, labels, and comments; earlier edit revisions are unavailable and were not backdated.",
+   "source": "github",
+   "source_ids": [
+    "#10",
+    "#11",
+    "#12"
+   ],
+   "retryable": false
+  }
+ ],
+ "counters": {
+  "commits": 18,
+  "work_items": 3,
+  "api_requests": 0,
+  "text_bytes": 0,
+  "llm_requests": 1,
+  "llm_input_tokens": 283,
+  "llm_output_tokens": 108,
+  "events": 49,
+  "effective_events": 49,
+  "superseded_events": 0,
+  "deferred_events": 0
+ },
+ "estimated_input_tokens": 283,
+ "estimated_output_tokens": 108
+}

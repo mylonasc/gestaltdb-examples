@@ -224,3 +224,29 @@ invalidates the entry. Tests use `GenericFakeChatModel` from
 `llm-history-unavailable` gap instead of a prompt. `[llm]` settings cover
 provider, model, temperature, privacy consent, retry attempts, prompt version,
 and cache file.
+
+## Separate worker processes
+
+`WorkerPool` runs work-item analysis in spawned OS processes. Jobs are
+durable, versioned envelopes with fully embedded inputs (feature snapshot,
+candidates, registry snapshot, horizon), so any worker — now or after a
+restart — replays the same job:
+
+```python
+from repo_history.worker import JobQueue, WorkerPool, collect_results, make_job_id
+
+queue = JobQueue("data/work")
+queue.submit(WorkJob(job_id=make_job_id(...), ...))  # resubmits dedupe
+pool = WorkerPool(queue, max_workers=2, task_timeout_seconds=120.0)
+pool.run_pending()  # crashed/timed-out jobs stay resumable
+results = collect_results(queue)  # merged in (horizon, job_id) order
+```
+
+Required enrichment (deterministic labeling) must succeed for a job to
+complete; optional enrichment (LLM proposals, rebuilt from embedded settings
+and scripted replies) may abstain or fail while the job still completes, and
+the two outcomes stay distinguishable in `WorkResult`. Results echo the job's
+horizon and record the worker PID; merging sorts by horizon so out-of-order
+completion cannot publish future context into an earlier event. Repeats are
+byte-identical by `job_id`, and the coordinator charges the shared ledger only
+for accepted optional usage.

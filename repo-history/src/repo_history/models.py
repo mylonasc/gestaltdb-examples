@@ -87,6 +87,23 @@ class Budgets(FrozenModel):
     max_llm_output_tokens: int = Field(default=8_000, ge=0)
 
 
+class GitSettings(FrozenModel):
+    """Bounded history and content limits for the Git adapter."""
+
+    max_depth: int = Field(default=256, ge=1, le=4096)
+    initial_fetch_depth: int = Field(default=64, ge=1, le=1024)
+    max_fetch_depth: int = Field(default=512, ge=1, le=8192)
+    skew_tolerance_seconds: int = Field(default=0, ge=0, le=86_400)
+    rename_threshold: int = Field(default=50, ge=1, le=100)
+    max_blob_bytes: int = Field(default=2 * 1024 * 1024, ge=1_024)
+
+    @model_validator(mode="after")
+    def validate_fetch_depths(self) -> Self:
+        if self.initial_fetch_depth > self.max_fetch_depth:
+            raise ValueError("initial_fetch_depth must not exceed max_fetch_depth")
+        return self
+
+
 class LLMSettings(FrozenModel):
     enabled: bool = False
     provider: str = "openai"
@@ -99,6 +116,7 @@ class LLMSettings(FrozenModel):
 class RuntimeConfig(FrozenModel):
     repository: RepositorySpec
     budgets: Budgets = Field(default_factory=Budgets)
+    git: GitSettings = Field(default_factory=GitSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     data_root: str = "data"
     cache_dir: str = "data/cache"

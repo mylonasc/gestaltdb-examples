@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from repo_history.config import DEFAULT_CONFIG, config_fingerprint, load_config
-from repo_history.models import RuntimeConfig
+from repo_history.models import GitSettings, RuntimeConfig
 
 
 def test_sample_config_expresses_the_pinned_slice():
@@ -29,6 +29,25 @@ def test_sample_config_is_offline_capable_without_credentials():
     assert config.offline is False
     assert config.cache_dir == "data/cache"
     assert "openai" in config.llm.provider
+
+
+def test_git_settings_are_loaded_from_toml():
+    config = load_config()
+    assert config.git.max_depth == 256
+    assert config.git.initial_fetch_depth == 64
+    assert config.git.max_fetch_depth == 512
+    assert config.git.skew_tolerance_seconds == 0
+    assert config.git.rename_threshold == 50
+    assert config.git.max_blob_bytes == 2097152
+
+
+def test_git_settings_reject_inverted_fetch_depths():
+    with pytest.raises(ValidationError):
+        GitSettings(initial_fetch_depth=32, max_fetch_depth=16)
+    with pytest.raises(ValidationError):
+        GitSettings(max_depth=0)
+    with pytest.raises(ValidationError):
+        GitSettings(rename_threshold=101)
 
 
 def test_fingerprint_is_stable_and_sensitive(tmp_path):

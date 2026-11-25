@@ -94,6 +94,7 @@ def test_runtime_config_defaults_to_offline_safe_import():
     assert config.offline is False
     assert config.llm.enabled is False
     assert config.data_root == "data"
+    assert config.git.max_depth == 256
 
 
 def test_coverage_gap_is_immutable_and_typed():

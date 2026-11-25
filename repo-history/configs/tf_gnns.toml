@@ -19,6 +19,14 @@ max_llm_requests = 16
 max_llm_input_tokens = 64000
 max_llm_output_tokens = 8000
 
+[git]
+max_depth = 256
+initial_fetch_depth = 64
+max_fetch_depth = 512
+skew_tolerance_seconds = 0
+rename_threshold = 50
+max_blob_bytes = 2097152
+
 [llm]
 enabled = false
 provider = "openai"

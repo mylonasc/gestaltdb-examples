@@ -7,13 +7,21 @@ or an open database.
 
 from .config import RuntimeConfig, load_config
 from .events import EventKind, IngestEvent
-from .models import Budgets, CoverageGap, CoverageStatus, RepositorySpec, TimeWindow
+from .models import (
+    Budgets,
+    CoverageGap,
+    CoverageStatus,
+    GitSettings,
+    RepositorySpec,
+    TimeWindow,
+)
 
 __all__ = [
     "Budgets",
     "CoverageGap",
     "CoverageStatus",
     "EventKind",
+    "GitSettings",
     "IngestEvent",
     "RepositorySpec",
     "RuntimeConfig",

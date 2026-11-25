@@ -8,7 +8,13 @@ import pytest
 from pydantic import ValidationError
 
 from repo_history.config import DEFAULT_CONFIG, config_fingerprint, load_config
-from repo_history.models import ContentSettings, GitHubSettings, GitSettings, RuntimeConfig
+from repo_history.models import (
+    ContentSettings,
+    GitHubSettings,
+    GitSettings,
+    OrchestrationSettings,
+    RuntimeConfig,
+)
 
 
 def test_sample_config_expresses_the_pinned_slice():
@@ -92,6 +98,19 @@ def test_github_settings_reject_invalid_limits():
         GitHubSettings(api_url="api.github.com")
     with pytest.raises(ValidationError):
         GitHubSettings(token_env="  ")
+
+
+def test_orchestration_settings_are_loaded_from_toml():
+    config = load_config()
+    assert config.orchestration.journal_file == "data/journal/events.jsonl"
+    assert config.orchestration.checkpoint_file == "data/journal/checkpoint.json"
+
+
+def test_orchestration_settings_reject_blank_paths():
+    with pytest.raises(ValidationError):
+        OrchestrationSettings(journal_file="  ")
+    with pytest.raises(ValidationError):
+        OrchestrationSettings(checkpoint_file="")
 
 
 def test_fingerprint_is_stable_and_sensitive(tmp_path):

@@ -515,6 +515,7 @@ def test_offline_replay_uses_only_saved_evidence(tmp_path):
     assert second.pull_requests == first.pull_requests
     assert second.provider_labels == first.provider_labels
     assert second.hierarchy_edges == first.hierarchy_edges
+    assert [gap.code for gap in second.gaps] == [gap.code for gap in first.gaps]
     assert all(fetch.from_cache for fetch in second.fetches)
 
 

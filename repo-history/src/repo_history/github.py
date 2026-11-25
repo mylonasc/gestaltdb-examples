@@ -1466,9 +1466,15 @@ class GitHubDiscoverer:
         parent_path = f"{self._api_repository}/issues/{number}/parent"
         try:
             parent, _ = self._fetch_json(parent_path)
-        except (EvidenceMissing, GitHubPermissionError, GitHubResponseError) as exc:
+        except EvidenceMissing:
+            # A 404 online leaves no cache entry, so offline replay cannot
+            # tell it apart from missing evidence.  Both mean the same thing
+            # here — no parent edge — and staying silent keeps offline replay
+            # identical to the online run.
+            parent = None
+        except (GitHubPermissionError, GitHubResponseError) as exc:
             if isinstance(exc, GitHubResponseError) and exc.status_code in (404, 410):
-                pass  # No parent is a normal, complete answer.
+                parent = None  # No parent is a normal, complete answer.
             else:
                 self._add_gap(
                     "github-parent-unavailable",
@@ -1476,7 +1482,8 @@ class GitHubDiscoverer:
                     status=CoverageStatus.UNAVAILABLE,
                     source_ids=(str(number),),
                 )
-        else:
+                parent = None
+        if parent is not None:
             parent_number = parent.get("number")
             if isinstance(parent_number, int):
                 self._add_edge(

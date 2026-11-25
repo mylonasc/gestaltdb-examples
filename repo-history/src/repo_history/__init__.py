@@ -14,6 +14,7 @@ from .models import (
     CoverageStatus,
     GitHubSettings,
     GitSettings,
+    OrchestrationSettings,
     RepositorySpec,
     TimeWindow,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "GitHubSettings",
     "GitSettings",
     "IngestEvent",
+    "OrchestrationSettings",
     "RepositorySpec",
     "RuntimeConfig",
     "TimeWindow",

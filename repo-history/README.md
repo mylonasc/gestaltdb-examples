@@ -71,6 +71,10 @@ run replays saved evidence without opening a socket. Missing evidence, denied
 optional endpoints, exhausted budgets, and pagination truncation become explicit
 `CoverageGap`s or `AbsenceRecord`s instead of silently empty results.
 
+A parent lookup that was a 404 online leaves no cache entry, so offline replay
+treats the missing entry the same way: no parent edge, no gap. Online and
+offline runs therefore agree on events and coverage.
+
 Current issue bodies, labels, and comments are observations stamped at fetch
 time; they are never backdated to the item's creation. Creation, comments, and
 timeline events keep their source timestamps, while `RevisionAvailability`
@@ -79,3 +83,44 @@ native parent/sub-issue edges, PR heads, bases, merge commits, and PR commit
 lists are captured when present, and out-of-scope hierarchy edges are flagged
 without fetching the external item. Credentials are read from the configured
 environment variable and are never written to the cache.
+
+## Temporal replay and resumable orchestration
+
+`TemporalCoordinator` merges Git and GitHub event streams into one
+deterministic history: stable ordering by `(event_time, source, source_id,
+sequence)`, causal conflict resolution (later observations correct earlier
+ones; exact ties break deterministically), and deferral of events whose
+dependencies have not arrived yet. `git_selection_events` turns a bounded
+`GitSelection` into `BASELINE` events for boundary commits and `COMMIT` events
+for selected commits; immutable commits carry `info_horizon == event_time`,
+while mutable remote observations carry `info_horizon == observed_at`.
+
+```python
+from repo_history.orchestration import (
+    EventJournal,
+    StageRunner,
+    TemporalCoordinator,
+    git_selection_events,
+)
+
+runner = StageRunner.resume_or_create(
+    config.orchestration.journal_file,
+    config.orchestration.checkpoint_file,
+    manifest,
+    config.budgets,
+)
+snapshot = runner.run_stage("git", lambda: (git_events, git_gaps))
+result = TemporalCoordinator(config.repository).collect(snapshot.events)
+usable = TemporalCoordinator.visible_at(result.effective, horizon)
+```
+
+`EventJournal` persists events and gaps as an append-only JSONL log with a
+manifest header (run, repository, config fingerprint); byte-identical
+duplicates are skipped and corrections are kept. `CheckpointStore` records
+completed stages with the budget ledger counters and a digest binding the
+checkpoint to the journal prefix, so retries and resumes continue spending the
+same budgets and a diverged journal fails closed. `bootstrap` splits
+per-boundary bootstrap state from in-window replay, and `visible_at` gates
+enrichment by information horizon so future labels, docs, or async results
+cannot seed past decisions. Unavailable history stays a retryable gap; nothing
+is invented for it.

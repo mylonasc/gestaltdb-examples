@@ -127,6 +127,36 @@ class OrchestrationSettings(FrozenModel):
         return value.strip()
 
 
+class GraphSettings(FrozenModel):
+    """GestaltDB location and backend for the single-writer temporal graph."""
+
+    path: str = "data/graph"
+    backend: str = "lmdb"
+    overwrite: bool = False
+    map_size_bytes: int = Field(default=256 * 1024 * 1024, ge=16 * 1024 * 1024)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("graph path must not be blank")
+        return value.strip()
+
+    @field_validator("backend")
+    @classmethod
+    def validate_backend(cls, value: str) -> str:
+        if value not in ("lmdb", "leveldb", "pyrex"):
+            raise ValueError("graph backend must be one of lmdb, leveldb, pyrex")
+        return value
+
+    def backend_options(self) -> dict[str, Any]:
+        """Backend constructor options; the LMDB map must fit the slice."""
+
+        if self.backend == "lmdb":
+            return {"map_size": self.map_size_bytes}
+        return {}
+
+
 class GitHubSettings(FrozenModel):
     """Bounded GitHub REST discovery and evidence-cache limits."""
 
@@ -173,6 +203,7 @@ class RuntimeConfig(FrozenModel):
     content: ContentSettings = Field(default_factory=ContentSettings)
     github: GitHubSettings = Field(default_factory=GitHubSettings)
     orchestration: OrchestrationSettings = Field(default_factory=OrchestrationSettings)
+    graph: GraphSettings = Field(default_factory=GraphSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     data_root: str = "data"
     cache_dir: str = "data/cache"

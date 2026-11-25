@@ -33,8 +33,27 @@ from repo_history.evaluate import (
 )
 from repo_history.git import GitHistory
 from repo_history.github import EvidenceCache, GitHubCredentials, GitHubDiscoverer
-from repo_history.graph import GraphSink, map_discovery, map_git_index
+from repo_history.graph import (
+    GraphSink,
+    map_classes,
+    map_discovery,
+    map_folders,
+    map_git_index,
+    map_imports,
+    map_registry,
+    map_repository_branches,
+    map_topic_assignments,
+)
 from repo_history.ids import IdFactory
+from repo_history.labeling import (
+    DeterministicLabeler,
+    assign_commit,
+    extract_snapshot_features,
+    extract_work_item_features,
+    register_prevalent,
+    seed_commit_type_registry,
+    seed_structural_registry,
+)
 from repo_history.models import LLMSettings
 from repo_history.orchestration import (
     JournalManifest,
@@ -186,6 +205,52 @@ def main() -> None:
     def graph_stage():
         ran.add("graph")
         with Timer() as timer:
+            labeler = DeterministicLabeler(config.labeling)
+            all_paths = sorted({snapshot.path for snapshot in index.snapshots})
+            registry = seed_structural_registry(
+                all_paths, at=started_at, created_by=RUN_ID, ids=ids
+            )
+            registry = seed_commit_type_registry(
+                at=started_at, created_by=RUN_ID, ids=ids, base=registry
+            )
+            file_features = [
+                extract_snapshot_features(
+                    snap, content.content_for(snap.snapshot_id), subject_id=snap.snapshot_id
+                )
+                for snap in content.snapshots
+            ]
+            proposals: dict[str, list[str]] = {}
+            for features in file_features:
+                got = labeler.assign(
+                    features, registry, subject_id=features.subject_id,
+                    run_id=RUN_ID, info_horizon=started_at,
+                )
+                name = got.result.value.get("proposed_name")
+                if got.action == "propose" and name and registry.lookup(name) is None:
+                    proposals.setdefault(name, []).append(features.text())
+            registry, _ = register_prevalent(
+                registry, proposals, min_subjects=2, at=started_at,
+                created_by=RUN_ID, ids=ids,
+            )
+            file_assignments = [
+                labeler.assign(
+                    features, registry, subject_id=features.subject_id,
+                    run_id=RUN_ID, info_horizon=started_at,
+                )
+                for features in file_features
+            ]
+            touched: dict[str, list[str]] = {}
+            for entry in index.snapshots:
+                touched.setdefault(entry.commit_sha, []).append(entry.path)
+            records = (*selection.selected_commits, *selection.boundary_commits)
+            commit_assignments = [
+                assign_commit(
+                    record.message, touched.get(record.sha, []), registry,
+                    subject_id=ids.commit(record.sha), run_id=RUN_ID,
+                    info_horizon=started_at, ids=ids,
+                )
+                for record in records
+            ]
             graph_path = str(EVAL_ROOT / "graph")
             graph_settings = config.graph.model_copy(update={"path": graph_path})
             sink = (
@@ -196,21 +261,36 @@ def main() -> None:
             try:
                 git_mapped = map_git_index(index, ids, run_id=RUN_ID)
                 gh_mapped = map_discovery(discovery, ids, run_id=RUN_ID)
-                entities = sink.write_entities(
-                    [*git_mapped.entities, *gh_mapped.entities], analysis_run_id=RUN_ID
+                folders_mapped = map_folders(
+                    [snapshot.path for snapshot in content.snapshots],
+                    ids, run_id=RUN_ID, window_start=config.repository.window.start,
                 )
-                relationships = sink.write_relationships(
-                    [*git_mapped.relationships, *gh_mapped.relationships],
-                    analysis_run_id=RUN_ID,
+                branches_mapped = map_repository_branches(
+                    [branch.name for branch in index.branches],
+                    ids, run_id=RUN_ID, window_start=config.repository.window.start,
                 )
+                topics_mapped = map_registry(registry, ids, run_id=RUN_ID)
+                about_mapped = map_topic_assignments(
+                    [*file_assignments, *commit_assignments], ids, run_id=RUN_ID
+                )
+                classes_mapped = map_classes(content, index, ids, run_id=RUN_ID)
+                imports_mapped = map_imports(content, index, ids, run_id=RUN_ID)
+                all_entities = [
+                    *git_mapped.entities, *gh_mapped.entities,
+                    *folders_mapped.entities, *topics_mapped.entities,
+                    *classes_mapped.entities,
+                ]
+                all_relationships = [
+                    *git_mapped.relationships, *gh_mapped.relationships,
+                    *folders_mapped.relationships, *branches_mapped.relationships,
+                    *about_mapped.relationships, *classes_mapped.relationships,
+                    *imports_mapped.relationships,
+                ]
+                entities = sink.write_entities(all_entities, analysis_run_id=RUN_ID)
+                relationships = sink.write_relationships(all_relationships, analysis_run_id=RUN_ID)
                 # Same-run duplicate ingestion must be fully skipped.
-                dup_entities = sink.write_entities(
-                    [*git_mapped.entities, *gh_mapped.entities], analysis_run_id=RUN_ID
-                )
-                dup_relationships = sink.write_relationships(
-                    [*git_mapped.relationships, *gh_mapped.relationships],
-                    analysis_run_id=RUN_ID,
-                )
+                dup_entities = sink.write_entities(all_entities, analysis_run_id=RUN_ID)
+                dup_relationships = sink.write_relationships(all_relationships, analysis_run_id=RUN_ID)
                 state["graph_counts"] = (
                     entities.entities_written,
                     relationships.relationships_written,

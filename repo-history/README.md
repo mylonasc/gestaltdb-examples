@@ -360,7 +360,7 @@ omissions reported, and the footer records run, horizon, counts, and gaps.
 and writes `examples/viewer.html`, a self-contained page (D3 loaded from
 CDN, with an offline data-table fallback) with a force-directed layout whose
 x-axis is time and whose y-axis follows the entity hierarchy
-(Repository → Branch → WorkItem → Commit → Topic → Folder → File). All edge
+(Repository → Branch → WorkItem → Commit → Topic → Folder → File, with Class nodes grouped at file level). All edge
 kinds are included — `PARENT_COMMIT`, `TIP_OF`, `TOUCHES` (including
 `DEFINED_AT` class-to-file edges), `IMPORTS` (intra-repo Python imports),
 `CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`, `RELATED_TO` (provider and
@@ -378,7 +378,8 @@ while `MEMBER_OF`/`OF_FILE` snapshot granularity stays folded into `TOUCHES`:
   per-link strength multiplier (`hierarchical pull` slider).
 - files are colored by detected type (source vs docs vs other, toggleable
   legend) instead of a single file color; folders group files by directory
-  under a single repository root.
+  under a single repository root; classes appear as named nodes linked to
+  their defining files.
 - nodes without timestamps (deleted branches, unobserved tips, the repository
   root) stay centered with no time pull; snapshot occurrences aggregate to
   file nodes and remote tracking refs resolve to PR head branches.

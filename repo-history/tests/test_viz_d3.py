@@ -266,6 +266,48 @@ def test_unobserved_branches_become_placeholders():
     assert all(edge["target"] != missing for edge in dropped["edges"])
 
 
+def test_class_nodes_show_class_names_not_file_paths():
+    from repo_history.graph import EntityWrite
+
+    arguments = fixture_inputs()
+    arguments["extra_nodes"] = [
+        EntityWrite(
+            logical_id="class:abc", labels=("Class",),
+            properties={"name": "GraphConv", "qualname": "models.GraphConv",
+                        "path": "models/gcn.py", "line": 3},
+            valid_from=DAY_ONE, origin="git", origin_id="models/gcn.py:GraphConv",
+            event_id="e1", run_id=RUN_ID, info_horizon=NOW, evidence_ids=(),
+        ),
+    ]
+    data = build_viewer_data(**arguments)
+    by_id = {node["id"]: node for node in data["nodes"]}
+
+    assert by_id["class:abc"]["label"] == "GraphConv"
+    assert by_id["class:abc"]["title"] == "models.GraphConv"
+    assert by_id["class:abc"]["t"] is not None
+
+
+def test_hashed_subject_assignments_link_to_commit_nodes():
+    from repo_history.graph import map_topic_assignments
+    from repo_history.labeling import TopicAssignment
+
+    hashed = ids().commit(TIP)
+    base = fixture_inputs()["assignments"][0]
+    assignment = TopicAssignment(
+        subject_id=hashed, kind="derived", action="reuse",
+        topic_id=base.topic_id, topic_name=base.topic_name, confidence=0.9,
+        rationale="hashed", registry_version=1, result=base.result,
+    )
+    about = map_topic_assignments([assignment], ids(), run_id=RUN_ID)
+    assert about.relationships[0].source == hashed
+
+    data = build_viewer_data(**fixture_inputs(extra_edges=list(about.relationships)))
+    assert any(
+        edge["source"] == hashed and edge["relation"] == "ABOUT"
+        for edge in data["edges"]
+    )
+
+
 def test_extra_structural_nodes_join_with_folder_times():
     from repo_history.graph import map_folders
 

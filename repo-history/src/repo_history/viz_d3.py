@@ -128,6 +128,10 @@ def build_viewer_data(
     }
     for item in discovery.work_items:
         subject_time[f"workitem:github:{item.number}"] = item.created_at
+        subject_time[ids.work_item("github", item.number)] = item.created_at
+    for sha, committed_at in commit_times.items():
+        subject_time[sha] = committed_at
+        subject_time[ids.commit(sha)] = committed_at
     for assignment in assignments:
         if assignment.kind != "derived" or assignment.topic_id is None:
             continue
@@ -270,9 +274,14 @@ def build_viewer_data(
             moment = write.valid_from
         if moment is not None:
             times[write.logical_id] = moment
-        label = str(write.properties.get("path", write.properties.get("name", write.logical_id)))
+        if kind == "Class":
+            label = str(write.properties.get("name", write.logical_id))
+            title = str(write.properties.get("qualname", label))
+        else:
+            label = str(write.properties.get("path", write.properties.get("name", write.logical_id)))
+            title = label
         add(
-            write.logical_id, kind, label[-34:], title=label, time=_iso(moment),
+            write.logical_id, kind, label[-34:], title=title, time=_iso(moment),
             props=dict(write.properties),
             prov={"method": write.origin, "run_id": run_id,
                   "horizon": info_horizon.isoformat()},

@@ -34,8 +34,15 @@ from repo_history.evaluate import (
 from repo_history.git import GitHistory
 from repo_history.github import EvidenceCache, GitHubCredentials, GitHubDiscoverer
 from repo_history.graph import (
+    BELONGS_TO,
+    CHANGES,
+    DEFINED_AT,
     GraphSink,
+    HAS_BRANCH,
+    HAS_FOLDER,
+    IMPORTS,
     map_classes,
+    map_diffs,
     map_discovery,
     map_folders,
     map_git_index,
@@ -275,16 +282,17 @@ def main() -> None:
                 )
                 classes_mapped = map_classes(content, index, ids, run_id=RUN_ID)
                 imports_mapped = map_imports(content, index, ids, run_id=RUN_ID)
+                diffs_mapped = map_diffs(content, index, ids, run_id=RUN_ID)
                 all_entities = [
                     *git_mapped.entities, *gh_mapped.entities,
                     *folders_mapped.entities, *topics_mapped.entities,
-                    *classes_mapped.entities,
+                    *classes_mapped.entities, *diffs_mapped.entities,
                 ]
                 all_relationships = [
                     *git_mapped.relationships, *gh_mapped.relationships,
                     *folders_mapped.relationships, *branches_mapped.relationships,
                     *about_mapped.relationships, *classes_mapped.relationships,
-                    *imports_mapped.relationships,
+                    *imports_mapped.relationships, *diffs_mapped.relationships,
                 ]
                 entities = sink.write_entities(all_entities, analysis_run_id=RUN_ID)
                 relationships = sink.write_relationships(all_relationships, analysis_run_id=RUN_ID)

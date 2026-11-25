@@ -38,6 +38,7 @@ from repo_history.github import (
 from repo_history.graph import (
     GraphSink,
     map_classes,
+    map_diffs,
     map_discovery,
     map_folders,
     map_git_index,
@@ -433,30 +434,33 @@ def test_synthetic_end_to_end_pipeline(tmp_path):
         about_mapped = map_topic_assignments(second_pass, ids, run_id=RUN_ID)
         classes_mapped = map_classes(content, index, ids, run_id=RUN_ID)
         imports_mapped = map_imports(content, index, ids, run_id=RUN_ID)
+        diffs_mapped = map_diffs(content, index, ids, run_id=RUN_ID)
         sink = GraphSink.create(
             GraphSettings(path=str(tmp_path / "graph"), backend="lmdb"),
             run_id=RUN_ID, overwrite=True,
         )
         sink.write_entities(
             [*git_mapped.entities, *gh_mapped.entities, *topics_mapped.entities,
-             *classes_mapped.entities, *folders_mapped.entities],
+             *classes_mapped.entities, *folders_mapped.entities, *diffs_mapped.entities],
             analysis_run_id=RUN_ID,
         )
         sink.write_relationships(
             [*git_mapped.relationships, *gh_mapped.relationships, *link_writes,
              *folders_mapped.relationships, *about_mapped.relationships,
-             *classes_mapped.relationships, *imports_mapped.relationships],
+             *classes_mapped.relationships, *imports_mapped.relationships,
+             *diffs_mapped.relationships],
             analysis_run_id=RUN_ID,
         )
         dup_entities = sink.write_entities(
             [*git_mapped.entities, *gh_mapped.entities, *topics_mapped.entities,
-             *classes_mapped.entities, *folders_mapped.entities],
+             *classes_mapped.entities, *folders_mapped.entities, *diffs_mapped.entities],
             analysis_run_id=RUN_ID,
         )
     timings["graph"] = timer.seconds
     assert dup_entities.entities_duplicate == (
         len(git_mapped.entities) + len(gh_mapped.entities) + len(topics_mapped.entities)
         + len(classes_mapped.entities) + len(folders_mapped.entities)
+        + len(diffs_mapped.entities)
     )
     assert sink.label_counts()["Commit"] == 2
     assert sink.label_counts()["WorkItem"] == 2

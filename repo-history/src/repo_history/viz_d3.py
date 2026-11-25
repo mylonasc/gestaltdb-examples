@@ -13,7 +13,7 @@ mid-time), with kind/edge filters, search, labels, and a details panel.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from .content import ContentIndex, detect_language
@@ -193,6 +193,20 @@ def build_viewer_data(
             "rationale": str(write.properties.get("rationale", write.edge_type)),
             "evidence": len(write.evidence_ids),
         })
+    # Commit-to-file touches stay aggregated at file level: the index keeps
+    # per-commit diffs, but the viewer draws one edge per touched file.
+    for snapshot in index.snapshots:
+        if snapshot.commit_sha not in commit_times:
+            continue
+        extra.append({
+            "source": canonical_endpoint(ids.commit(snapshot.commit_sha)),
+            "target": canonical_endpoint(ids.file(snapshot.path)),
+            "relation": "TOUCHES",
+            "hierarchical": True,
+            "inferred": False,
+            "rationale": "commit touches file (diffs folded)",
+            "evidence": 0,
+        })
 
     path_of_id = {
         ids.file(snapshot.path): snapshot.path for snapshot in content.snapshots
@@ -222,10 +236,42 @@ def build_viewer_data(
         if first_seen is not None:
             times[file_id] = first_seen
         language = detect_language(path)
+        history = sorted(
+            {
+                (commit_times[entry.commit_sha], entry.commit_sha, entry.content_status)
+                for entry in index.snapshots
+                if entry.path == path and entry.commit_sha in commit_times
+            }
+        )
+        preview = ""
+        candidates = [
+            entry for entry in index.snapshots if entry.path == path
+        ] or [snap for snap in content.snapshots if snap.path == path]
+        latest = max(
+            candidates,
+            key=lambda entry: commit_times.get(entry.commit_sha, datetime.min.replace(tzinfo=timezone.utc)),
+            default=None,
+        )
+        definition_url = latest.source_url if latest is not None else None
+        if latest is not None:
+            snapshot_id = getattr(latest, "snapshot_id", None)
+            parsed = content.content_for(snapshot_id) if snapshot_id else None
+            if parsed is not None and parsed.text:
+                preview = "\n".join(parsed.text.splitlines()[:30])[:1500]
+        basename = path.rsplit("/", 1)[-1]
         add(
-            file_id, "File", path[-34:], title=path, time=_iso(first_seen),
+            file_id, "File", basename[-34:], title=path, time=_iso(first_seen),
             language=language,
-            props={"path": path, "language": language},
+            props={
+                "path": path,
+                "language": language,
+                "definition_url": definition_url,
+                "history": [
+                    {"at": moment.isoformat(), "commit": sha, "status": status}
+                    for moment, sha, status in history
+                ],
+                "preview": preview,
+            },
             prov={"method": "linking", "run_id": run_id,
                   "horizon": info_horizon.isoformat()},
         )
@@ -343,6 +389,12 @@ def build_viewer_data(
     edges.extend(
         edge for edge in extra if edge["source"] in kept and edge["target"] in kept
     )
+    repository_bits = repository_url.rstrip("/").split("/")
+    repository_name = (
+        "/".join(repository_bits[-2:]) if len(repository_bits) >= 2 else repository_url
+    )
+    if repository_name.endswith(".git"):
+        repository_name = repository_name[:-4]
     kept_nodes = [nodes[nid] for nid in sorted(kept)]
     counts = {"links": len(edges), "omitted": omitted}
     for node in kept_nodes:
@@ -358,6 +410,7 @@ def build_viewer_data(
             "window": {"start": window.start.isoformat(), "end": window.end.isoformat()},
             "counts": counts,
             "max_nodes": max_nodes,
+            "repository": {"name": repository_name, "url": repository_url},
             "notes": (
                 "Snapshot occurrences aggregate to file nodes; "
                 "MEMBER_OF/OF_FILE snapshot granularity is folded into TOUCHES. "
@@ -410,7 +463,7 @@ button { margin: 2px; }
 <label><input type="checkbox" id="filecolors" checked> color files by type</label></div>
 <h3>Search</h3><div class="row"><input type="text" id="search" placeholder="label substring"><button id="find">Find</button></div>
 <div class="row"><button id="pause">Pause</button><button id="reset">Reset view</button></div>
-<h3>Details</h3><div id="details">Click a node to inspect its relations.</div>
+<h3>Details</h3><div class="row" id="repolink"></div><div id="details">Click a node to inspect its relations.</div>
 <h3>Legend</h3><div class="row" id="legend"></div>
 </div>
 <div id="fallback" style="display:none"></div>
@@ -444,7 +497,7 @@ const DATA = __DATA__;
   // --- temporal forces: anchor pulls every x to mid-time center; ---
   // --- spread pulls left/right with strength growing from mid-time. ---
   const P = { anchor: 0.06, base: 0.015, far: 0.14, gamma: 1.0, link: 0.25, hierMult: 1.6, rank: 0.12 };
-  const TIERS = { Repository: 0, Branch: 1, WorkItem: 2, Commit: 3, Topic: 4, Folder: 5, File: 6 };
+  const TIERS = { Repository: 0, Branch: 1, WorkItem: 2, Commit: 3, Topic: 4, Folder: 5, File: 6, Class: 7 };
   function temporalForce() {
     let nodes = [];
     function force(alpha) {
@@ -478,8 +531,8 @@ const DATA = __DATA__;
   });
 
   const link = g.append('g').selectAll('line').data(DATA.edges).join('line')
-    .attr('stroke', e => e.inferred ? '#9e6a03' : (['PARENT_COMMIT', 'MEMBER_OF', 'OF_FILE', 'TIP_OF', 'TOUCHES'].includes(e.relation) ? '#8b949e' : '#1f6feb'))
-    .attr('stroke-width', e => ['PARENT_COMMIT', 'TIP_OF', 'TOUCHES'].includes(e.relation) ? 1 : 2)
+    .attr('stroke', e => e.inferred ? '#9e6a03' : (['PARENT_COMMIT', 'MEMBER_OF', 'OF_FILE', 'TIP_OF', 'TOUCHES', 'BELONGS_TO', 'HAS_BRANCH', 'HAS_FOLDER', 'DEFINED_AT'].includes(e.relation) ? '#8b949e' : '#1f6feb'))
+    .attr('stroke-width', e => ['PARENT_COMMIT', 'TIP_OF', 'TOUCHES', 'BELONGS_TO'].includes(e.relation) ? 1 : 2)
     .attr('stroke-dasharray', e => e.inferred ? '5,3' : null);
   link.append('title').text(e => e.relation + (e.rationale ? ': ' + e.rationale : ''));
   const node = g.append('g').selectAll('g').data(DATA.nodes).join('g')
@@ -553,13 +606,34 @@ const DATA = __DATA__;
         const arrow = idOf(e.source) === d.id ? '→' : '←';
         return `<div>${arrow} <b>${esc(e.relation)}</b> ${esc(idOf(other))}${e.inferred ? ' (inferred)' : ''}</div>`;
       }).join('');
+    let extra = '';
+    if (d.props) {
+      if (d.props.path) extra += `path: <code>${esc(d.props.path)}</code><br>`;
+      if (d.props.definition_url) extra += `definition: <a href="${esc(d.props.definition_url)}" target="_blank" rel="noopener">${esc((DATA.meta.repository && DATA.meta.repository.name) || 'repo')}:${esc(d.props.path || '')}</a><br>`;
+      if (d.props.language) extra += `language: ${esc(d.props.language)}<br>`;
+      if (d.props.qualname) extra += `qualname: <code>${esc(d.props.qualname)}</code><br>`;
+      if (d.props.line) extra += `line: ${d.props.line}<br>`;
+      if (d.props.relation) extra += `relation: ${esc(d.props.relation)}<br>`;
+      if (d.props.status) extra += `status: ${esc(d.props.status)}<br>`;
+      if (d.props.preview) extra += `<br><b>preview</b><pre style="white-space:pre-wrap;font-size:11px;max-height:220px;overflow:auto">${esc(d.props.preview)}</pre>`;
+      if (Array.isArray(d.props.history) && d.props.history.length) {
+        extra += '<br><b>change history</b><br>' + d.props.history.slice(0, 20).map(h =>
+          `<div>${esc(h.at.slice(0, 10))} · <code>${esc(h.commit.slice(0, 8))}</code> · ${esc(h.status)}</div>`
+        ).join('') + (d.props.history.length > 20 ? `<div>… +${d.props.history.length - 20} more</div>` : '');
+      }
+    }
     document.getElementById('details').innerHTML =
       `<b>${d.kind}</b> · ${esc(d.label)}<br>id: <code>${esc(d.id)}</code><br>` +
       (d.time ? `time: ${d.time} (t=${d.t.toFixed(2)})<br>` : 'time: n/a (centered, no time pull)<br>') +
+      extra +
       `<br>${nbrs || 'No relations in the current filter.'}`;
   }
 
   // controls
+  if (DATA.meta && DATA.meta.repository && DATA.meta.repository.url) {
+    document.getElementById('repolink').innerHTML =
+      `repository: <a href="${esc(DATA.meta.repository.url)}" target="_blank" rel="noopener">${esc(DATA.meta.repository.name)}</a>`;
+  }
   const kf = document.getElementById('kindFilters');
   kinds.forEach(k => { kf.innerHTML += `<label class="kind"><input type="checkbox" value="${k}" checked> ${k}</label>`; });
   const ef = document.getElementById('edgeFilters');

@@ -272,6 +272,13 @@ class ParsedContent(FrozenModel):
     markdown: MarkdownDocument | None = None
     code: CodeDocument | None = None
     error: str | None = None
+    text: str | None = None
+    """Full decoded text for parsed blobs (bounded by ``max_file_bytes``).
+
+    Stored so downstream stages (diff text, file previews) can quote source
+    without re-reading blobs; ``None`` for binary, oversized, undecodable,
+    or otherwise unparsed content.
+    """
 
 
 class SnapshotContent(FrozenModel):
@@ -706,6 +713,7 @@ class ContentExtractor:
                     "text_bytes": len(data),
                     "line_count": _line_count(text),
                     "markdown": self._parse_markdown(text),
+                    "text": text,
                 }
             )
         elif media_type in {"python", "code"}:
@@ -715,6 +723,7 @@ class ContentExtractor:
                     "text_bytes": len(data),
                     "line_count": _line_count(text),
                     "code": code,
+                    "text": text,
                 }
             )
         else:
@@ -722,6 +731,7 @@ class ContentExtractor:
                 update={
                     "text_bytes": len(data),
                     "line_count": _line_count(text),
+                    "text": text,
                 }
             )
 

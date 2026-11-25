@@ -162,19 +162,23 @@ sink.write_relationships(mapped.relationships, analysis_run_id=run_id)
 sink.close()
 ```
 
-`map_git_index` emits `Commit`, `Snapshot`, `File` (with detected language and
-media type), and `Branch` entities with `PARENT_COMMIT`, `MEMBER_OF`,
-`OF_FILE`, `TOUCHES` (direct commit-to-file evidence), and `TIP_OF`
-relationships; `map_imports` resolves intra-repository Python imports
-(absolute, relative, and `__init__` packages; third-party imports are
-reported, never invented) into `IMPORTS` file-to-file edges; `map_classes`
-emits `Class` entities with `DEFINED_AT` edges to their files; `map_folders`
-emits `Folder` entities, a single `Repository` root, and `BELONGS_TO`
-file-to-folder edges (plus `HAS_BRANCH` repo-to-branch edges via
-`map_repository_branches`). Structural and containment edges
-(`PARENT_COMMIT`, `MEMBER_OF`, `OF_FILE`, `TOUCHES`, `TIP_OF`, `CHILD_OF`,
-`BELONGS_TO`, `HAS_BRANCH`) carry `hierarchical: true` provenance for a
-stronger configurable pull. `map_discovery` emits `WorkItem` and `ProviderLabel` entities
+`map_git_index` emits `Commit`, `Snapshot`, `File` (with detected language
+and media type), and `Branch` entities with `PARENT_COMMIT`, `MEMBER_OF`,
+and `OF_FILE` relationships plus `TIP_OF` branch links. `map_diffs` turns
+each changed file into a `Diff` entity carrying the change status and a
+bounded text preview; commits reach diffs through `TOUCHES` edges and diffs
+reach files through `CHANGES` edges, so ancestry is never invented and the
+full text stays in parsed content. `map_imports` resolves intra-repository
+Python imports (absolute, relative, and `__init__` packages; third-party
+imports are reported, never invented) into `IMPORTS` file-to-file edges;
+`map_classes` emits `Class` entities with `DEFINED_AT` edges to their files;
+`map_folders` emits `Folder` entities, a single `Repository` root, and
+immediate-parent `BELONGS_TO` file→folder and folder→folder edges (plus
+`HAS_BRANCH` repo→branch edges via `map_repository_branches`). Containment
+and ancestry edges (`PARENT_COMMIT`, `MEMBER_OF`, `OF_FILE`, `TOUCHES`,
+`CHANGES`, `BELONGS_TO`, `HAS_BRANCH`, `HAS_FOLDER`, `TIP_OF`, `CHILD_OF`,
+`DEFINED_AT`) carry `hierarchical: true` provenance for a stronger
+configurable pull. `map_discovery` emits `WorkItem` and `ProviderLabel` entities
 with `HAS_LABEL`, `CHILD_OF`, and `MERGED_AS` relationships; `map_registry`
 emits `Topic` entities and `map_topic_assignments` emits `ABOUT` edges from
 deterministic topic assignments (commits, files, and work items). Out-of-scope
@@ -361,12 +365,12 @@ and writes `examples/viewer.html`, a self-contained page (D3 loaded from
 CDN, with an offline data-table fallback) with a force-directed layout whose
 x-axis is time and whose y-axis follows the entity hierarchy
 (Repository → Branch → WorkItem → Commit → Topic → Folder → File, with Class nodes grouped at file level). All edge
-kinds are included — `PARENT_COMMIT`, `TIP_OF`, `TOUCHES` (including
-`DEFINED_AT` class-to-file edges), `IMPORTS` (intra-repo Python imports),
-`CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`, `RELATED_TO` (provider and
-inferred), `BELONGS_TO`, `HAS_BRANCH`, and `ABOUT` (topic assignments;
-snapshot occurrences aggregate to their file, as the page footer notes) —
-while `MEMBER_OF`/`OF_FILE` snapshot granularity stays folded into `TOUCHES`:
+kinds are included — `PARENT_COMMIT`, `TIP_OF`, `TOUCHES` (commit→diff),
+`CHANGES` (diff→file), `DEFINED_AT` (class→file), `IMPORTS` (intra-repo
+Python imports), `CLOSED_BY`, `MENTIONS`, `INTENDS_TO_RESOLVE`,
+`RELATED_TO` (provider and inferred), `BELONGS_TO`, `HAS_BRANCH`, and
+`ABOUT` (topic assignments; per-commit file states stay folded behind the
+file-level `TOUCHES` view, as the page footer notes):
 
 - every timestamped node is normalized to `t` in `[0, 1]` across the graph;
   an anchor force pulls every node toward the mid-time center while a second
@@ -379,7 +383,9 @@ while `MEMBER_OF`/`OF_FILE` snapshot granularity stays folded into `TOUCHES`:
 - files are colored by detected type (source vs docs vs other, toggleable
   legend) instead of a single file color; folders group files by directory
   under a single repository root; classes appear as named nodes linked to
-  their defining files.
+  their defining files. Selecting a file shows its text preview and
+  per-commit change history; selecting any node shows its provenance and
+  evidence.
 - nodes without timestamps (deleted branches, unobserved tips, the repository
   root) stay centered with no time pull; snapshot occurrences aggregate to
   file nodes and remote tracking refs resolve to PR head branches.

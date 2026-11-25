@@ -130,7 +130,18 @@ def link(
 
 
 def fixture_inputs(**overrides):
-    content = ContentIndex(snapshots=(guide_snapshot(),))
+    from repo_history.content import ParsedContent
+
+    content = ContentIndex(
+        contents=(
+            ParsedContent(
+                content_id="c:snap:guide", blob_id="blob:guide", oid="o" * 40,
+                media_type="markdown", status="parsed", language="markdown",
+                text="# Guide\n\nSee the training guide.\n",
+            ),
+        ),
+        snapshots=(guide_snapshot(),),
+    )
     arguments = {
         "index": fixture_index(),
         "discovery": fixture_discovery(),
@@ -439,6 +450,57 @@ def test_viewer_page_has_hierarchy_file_and_time_controls():
     assert "color files by type" in html
 
 
+def test_viewer_synthesizes_commit_file_touches_and_file_details():
+    from repo_history.git import TreeEntryRecord
+
+    arguments = fixture_inputs()
+    index = arguments["index"]
+    arguments["index"] = index.model_copy(update={"snapshots": (
+        TreeEntryRecord(
+            snapshot_id="snap:guide", commit_sha=TIP, path="docs/guide.md",
+            object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+            is_binary=False, is_lfs_pointer=False, content_status="inspected",
+            source_url="u",
+        ),
+    )})
+    data = build_viewer_data(**arguments)
+
+    touches = [
+        edge for edge in data["edges"]
+        if edge["relation"] == "TOUCHES"
+        and edge["source"] == ids().commit(TIP)
+        and edge["target"] == ids().file("docs/guide.md")
+    ]
+    assert len(touches) == 1
+    assert touches[0]["hierarchical"] is True
+    assert touches[0]["inferred"] is False
+
+    by_id = {node["id"]: node for node in data["nodes"]}
+    doc = by_id[ids().file("docs/guide.md")]
+    assert doc["kind"] == "File"
+    assert doc["t"] is not None
+    assert doc["props"]["history"]
+    assert doc["props"]["preview"].startswith("# Guide")
+
+
+def test_class_nodes_rank_below_files_and_carry_qualified_names():
+    arguments = fixture_inputs()
+    arguments["extra_nodes"] = [
+        __import__("repo_history.graph", fromlist=["EntityWrite"]).EntityWrite(
+            logical_id="class:1", labels=("Class",),
+            properties={"name": "GraphConv", "qualname": "models.GraphConv",
+                        "path": "models/gcn.py", "line": 3},
+            valid_from=DAY_ONE, origin="git", origin_id="models/gcn.py:GraphConv",
+            event_id="e1", run_id=RUN_ID, info_horizon=NOW, evidence_ids=(),
+        )
+    ]
+    data = build_viewer_data(**arguments)
+    by_id = {node["id"]: node for node in data["nodes"]}
+
+    assert by_id["class:1"]["label"] == "GraphConv"
+    assert by_id["class:1"]["kind"] == "Class"
+
+
 def test_export_is_deterministic():
     assert build_viewer_data(**fixture_inputs()) == build_viewer_data(**fixture_inputs())
 
@@ -468,6 +530,29 @@ def test_extra_structural_nodes_join_with_hierarchy_times():
     assert by_id["folder:docs"]["t"] == 1.0
     assert by_id["repo:x"]["t"] is None
     assert "Repository" in {node["kind"] for node in data["nodes"]}
+
+
+def test_file_nodes_show_filenames_with_clickable_definitions():
+    data = build_viewer_data(**fixture_inputs())
+
+    files = [node for node in data["nodes"] if node["kind"] == "File"]
+    assert files
+    for node in files:
+        assert "/" not in node["label"], node["label"]
+        assert node["props"]["definition_url"].startswith("https://"), node["props"]
+        assert node["props"]["path"].endswith(node["label"])
+    assert data["meta"]["repository"] == {
+        "name": "mylonasc/tf_gnns",
+        "url": "https://github.com/mylonasc/tf_gnns",
+    }
+
+
+def test_details_panel_offers_clickable_repo_and_definition_links():
+    html = render_viewer_html(build_viewer_data(**fixture_inputs()))
+
+    assert 'id="repolink"' in html
+    assert "definition_url" in html
+    assert "target=" in html and "_blank" in html
 
 
 def test_viewer_has_rank_force_and_no_label_force():

@@ -14,6 +14,7 @@ from repo_history.content import ContentIndex, SnapshotContent
 from repo_history.git import (
     BranchObservation,
     CommitRecord,
+    FileChangeRecord,
     GitIndex,
     GitSelection,
     TreeEntryRecord,
@@ -29,8 +30,13 @@ from repo_history.github import (
 )
 from repo_history.graph import (
     ABOUT,
+    BELONGS_TO,
+    CHANGES,
     CHILD_OF,
+    HAS_BRANCH,
+    HAS_FOLDER,
     HAS_LABEL,
+    IMPORTS,
     MEMBER_OF,
     MERGED_AS,
     OF_FILE,
@@ -41,9 +47,13 @@ from repo_history.graph import (
     GraphClosedError,
     GraphError,
     GraphSink,
+    map_diffs,
     map_discovery,
+    map_folders,
     map_git_index,
+    map_imports,
     map_registry,
+    map_repository_branches,
     map_topic_assignments,
 )
 from repo_history.ids import IdFactory
@@ -343,22 +353,79 @@ def test_map_discovery_covers_items_labels_hierarchy_and_merges():
     assert "out of scope" in mapped.skipped[0]
 
 
-def test_map_git_index_adds_direct_commit_file_touches():
+def test_map_git_index_has_no_direct_commit_file_edges():
+    # Commits reach files only through diffs (see map_diffs); the Git
+    # selection maps ancestry, snapshots, files, and branches.
     boundary = commit("b" * 40, committed_at=T0)
     tip = commit("c" * 40, parents=(boundary.sha,), committed_at=DAY_ONE)
     mapped = map_git_index(git_index(selection((tip,), (boundary,))), ids(), run_id=RUN_ID)
 
-    touches = [edge for edge in mapped.relationships if edge.edge_type == TOUCHES]
-    assert len(touches) == len(
-        [entry for entry in mapped.entities if "Snapshot" in entry.labels]
+    kinds = {edge.edge_type for edge in mapped.relationships}
+    assert "TOUCHES" not in kinds and "CHANGES" not in kinds
+    assert {"PARENT_COMMIT", "MEMBER_OF", "OF_FILE", "TIP_OF"} <= kinds
+
+
+def test_map_diffs_links_commits_to_files_through_diff_nodes():
+    from repo_history.content import CodeDocument, ImportRecord, ParsedContent
+    from repo_history.git import TreeEntryRecord
+
+    tip, base = "c" * 40, "b" * 40
+    content = ContentIndex(
+        contents=(
+            ParsedContent(
+                content_id="c:x", blob_id="b:x", oid="o" * 40, media_type="text",
+                status="parsed", text="hello\n",
+            ),
+        ),
+        snapshots=(
+            SnapshotContent(
+                snapshot_id="snap:tip", commit_sha=tip, path="x.py",
+                oid="o" * 40, content_id="c:x", status="parsed",
+                media_type="text", language="text", module=None,
+                is_baseline=False, source_url="u",
+            ),
+        ),
     )
-    assert {(edge.source, edge.target) for edge in touches} == {
-        (ids().commit("c" * 40), ids().file("x.py")),
-        (ids().commit("b" * 40), ids().file("x.py")),
-    }
-    assert all(edge.valid_from in (T0, DAY_ONE) for edge in touches)
-    assert all(edge.evidence_ids for edge in touches)
-    assert all(edge.properties.get("hierarchical") is True for edge in touches)
+    index = GitIndex(
+        selection=selection(
+            (commit(tip, parents=(base,), committed_at=DAY_ONE),),
+            (commit(base, committed_at=T0),),
+        ),
+        snapshots=(
+            TreeEntryRecord(
+                snapshot_id="snap:tip", commit_sha=tip, path="x.py",
+                object_id="o" * 40, mode=0o100644, kind="blob", size=10,
+                is_binary=False, is_lfs_pointer=False, content_status="inspected",
+                source_url="u",
+            ),
+        ),
+        changes=(
+            FileChangeRecord(
+                change_id="change:1", commit_sha=tip, parent_sha=base,
+                comparison="first-parent", path="x.py", status="added",
+                source_url="u",
+            ),
+        ),
+    )
+    mapped = map_diffs(content, index, ids(), run_id=RUN_ID)
+
+    assert len(mapped.entities) == 1
+    (entity,) = [e for e in mapped.entities if e.valid_from == DAY_ONE]
+    assert entity.labels == ("Diff",)
+    assert entity.properties["status"] == "added"
+    assert entity.properties["preview"] == "hello"
+    assert entity.valid_from == DAY_ONE
+
+    touches = [edge for edge in mapped.relationships if edge.edge_type == TOUCHES]
+    changes = [edge for edge in mapped.relationships if edge.edge_type == CHANGES]
+    assert len(touches) == 1 and len(changes) == 1
+    assert (touches[0].source, touches[0].target) == (
+        ids().commit(tip), entity.logical_id,
+    )
+    assert (changes[0].source, changes[0].target) == (
+        entity.logical_id, ids().file("x.py"),
+    )
+    assert all(edge.properties.get("hierarchical") is True for edge in mapped.relationships)
 
 
 def test_map_imports_resolves_absolute_relative_and_package_imports():
@@ -570,18 +637,37 @@ def test_map_folders_creates_hierarchy_with_repo_root():
     }
     assert set(folders_by_path) == {"models", "docs"}
     belongs = [edge for edge in mapped.relationships if edge.edge_type == BELONGS_TO]
+    # Files link only to their immediate parent; folders chain upward.
     assert {(edge.source, edge.target) for edge in belongs} == {
         (ids().file("models/gcn.py"), folders_by_path["models"]),
         (ids().file("models/graphnet.py"), folders_by_path["models"]),
         (ids().file("docs/guide.md"), folders_by_path["docs"]),
+        (ids().file("README.md"), ids().repository_id),
     }
     assert all(edge.properties.get("hierarchical") is True for edge in belongs)
+    has_folders = [edge for edge in mapped.relationships if edge.edge_type == "HAS_FOLDER"]
+    assert {(edge.source, edge.target) for edge in has_folders} == {
+        (ids().repository_id, folders_by_path["models"]),
+        (ids().repository_id, folders_by_path["docs"]),
+    }
 
     nested = map_folders(["a/b/c.py"], ids(), run_id=RUN_ID, window_start=WINDOW.start)
     nested_folders = {
-        entity.properties["path"] for entity in nested.entities if entity.labels == ("Folder",)
+        entity.properties["path"]: nid
+        for nid, entity in {
+            entity.logical_id: entity for entity in nested.entities if entity.labels == ("Folder",)
+        }.items()
     }
-    assert nested_folders == {"a", "a/b"}
+    assert set(nested_folders) == {"a", "a/b"}
+    nested_belongs = {
+        (edge.source, edge.target)
+        for edge in nested.relationships
+        if edge.edge_type == "BELONGS_TO"
+    }
+    assert nested_belongs == {
+        (ids().file("a/b/c.py"), nested_folders["a/b"]),
+        (nested_folders["a/b"], nested_folders["a"]),
+    }
     assert nested.entities[0].labels == ("Repository",)
 
     branches = map_repository_branches(["main", "feat"], ids(), run_id=RUN_ID, window_start=WINDOW.start)
@@ -593,10 +679,13 @@ def test_map_folders_creates_hierarchy_with_repo_root():
     assert all(edge.properties.get("hierarchical") is True for edge in branches.relationships)
 
 
-def test_about_and_touches_edges_persist_and_count(tmp_path):
+def test_about_and_diff_edges_persist_and_count(tmp_path):
+    from repo_history.content import CodeDocument, ImportRecord, ParsedContent
+
     boundary = commit("b" * 40, committed_at=T0)
     tip = commit("c" * 40, parents=(boundary.sha,), committed_at=DAY_ONE)
-    mapped = map_git_index(git_index(selection((tip,), (boundary,))), ids(), run_id=RUN_ID)
+    index = git_index(selection((tip,), (boundary,)))
+    mapped = map_git_index(index, ids(), run_id=RUN_ID)
     registry = seed_registry(at=NOW)
     registry, topic = registry.register(
         "sparse-training", at=NOW, created_by="test", ids=ids()
@@ -606,15 +695,41 @@ def test_about_and_touches_edges_persist_and_count(tmp_path):
         [topic_assignment("snap:guide", topic.topic_id, "sparse-training")],
         ids(), run_id=RUN_ID,
     )
+    content = ContentIndex(
+        contents=(
+            ParsedContent(
+                content_id="c:x", blob_id="b:x", oid="o" * 40, media_type="python",
+                status="parsed", language="python", text="import os\n",
+                code=CodeDocument(
+                    language="python",
+                    imports=(ImportRecord(kind="import", module=None, names=("os",), line=1),),
+                ),
+            ),
+        ),
+        snapshots=(
+            SnapshotContent(
+                snapshot_id="snap:tip", commit_sha=tip.sha, path="x.py",
+                oid="o" * 40, content_id="c:x", status="parsed",
+                media_type="python", language="python", module=None,
+                is_baseline=False, source_url="u",
+            ),
+        ),
+    )
+    diffs = map_diffs(content, index, ids(), run_id=RUN_ID)
 
     sink = sink_at(tmp_path)
-    sink.write_entities([*mapped.entities, *topics.entities], analysis_run_id=RUN_ID)
+    sink.write_entities(
+        [*mapped.entities, *topics.entities, *diffs.entities], analysis_run_id=RUN_ID
+    )
     sink.write_relationships(
-        [*mapped.relationships, *about.relationships], analysis_run_id=RUN_ID
+        [*mapped.relationships, *about.relationships, *diffs.relationships],
+        analysis_run_id=RUN_ID,
     )
 
     assert sink.label_counts()["Topic"] == 1
+    assert sink.label_counts()["Diff"] == 2
     assert sink.edge_counts()["TOUCHES"] == 2
+    assert sink.edge_counts()["CHANGES"] == 2
     assert sink.edge_counts()["ABOUT"] == 1
     found = sink.find_nodes("Topic", "name", "sparse-training")
     assert len(found) == 1
@@ -642,7 +757,8 @@ def test_file_entities_carry_language_and_edges_flag_hierarchy(tmp_path):
         for edge in mapped.relationships
         if edge.properties.get("hierarchical") is True
     }
-    assert {"PARENT_COMMIT", "MEMBER_OF", "OF_FILE", "TOUCHES", "TIP_OF"} <= hierarchical
+    assert {"PARENT_COMMIT", "MEMBER_OF", "OF_FILE", "TIP_OF"} <= hierarchical
+    assert "TOUCHES" not in {edge.edge_type for edge in mapped.relationships}
 
 
 def test_sink_round_trip_with_provenance(tmp_path):

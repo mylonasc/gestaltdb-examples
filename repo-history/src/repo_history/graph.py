@@ -43,9 +43,11 @@ from .protocols import GraphSink as GraphSinkProtocol
 __all__ = [
     "ABOUT",
     "BELONGS_TO",
+    "CHANGES",
     "CHILD_OF",
     "DEFINED_AT",
     "HAS_BRANCH",
+    "HAS_FOLDER",
     "HAS_LABEL",
     "IMPORTS",
     "MEMBER_OF",
@@ -66,6 +68,7 @@ __all__ = [
     "VersionRecord",
     "WriteReport",
     "map_classes",
+    "map_diffs",
     "map_discovery",
     "map_folders",
     "map_git_index",
@@ -84,8 +87,10 @@ PARENT_COMMIT = "PARENT_COMMIT"
 MEMBER_OF = "MEMBER_OF"
 OF_FILE = "OF_FILE"
 TOUCHES = "TOUCHES"
+CHANGES = "CHANGES"
 IMPORTS = "IMPORTS"
 HAS_BRANCH = "HAS_BRANCH"
+HAS_FOLDER = "HAS_FOLDER"
 HAS_LABEL = "HAS_LABEL"
 CHILD_OF = "CHILD_OF"
 TIP_OF = "TIP_OF"
@@ -95,7 +100,7 @@ MERGED_AS = "MERGED_AS"
 #: writes with ``properties["hierarchical"] = True``; the visualizer pulls
 #: them harder than associative edges (configurably).
 HIERARCHICAL_EDGE_TYPES = frozenset(
-    {PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, TIP_OF, CHILD_OF, BELONGS_TO, HAS_BRANCH}
+    {PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, CHANGES, TIP_OF, CHILD_OF, BELONGS_TO, HAS_BRANCH, HAS_FOLDER}
 )
 
 NODE_INDEXES = ("sha", "path", "number", "name", "prov_run_id")
@@ -305,28 +310,6 @@ def map_git_index(
                 run_id=run_id,
                 info_horizon=committed_at,
                 evidence_ids=(),
-            )
-        )
-        # Direct commit-to-file evidence: which files a commit touched.
-        relationships.append(
-            RelationshipWrite(
-                edge_id=stable_id(
-                    "edge", ids.repository_id, TOUCHES, entry.commit_sha, entry.path
-                ),
-                edge_type=TOUCHES,
-                source=ids.commit(entry.commit_sha),
-                target=ids.file(entry.path),
-                properties={"hierarchical": True},
-                valid_from=committed_at,
-                origin="git",
-                origin_id=f"{entry.commit_sha}:{entry.path}:touches",
-                event_id=stable_id(
-                    "graph-write", ids.repository_id, "git-touches",
-                    entry.commit_sha, entry.path,
-                ),
-                run_id=run_id,
-                info_horizon=committed_at,
-                evidence_ids=(ids.evidence("git", entry.commit_sha, entry.source_url),),
             )
         )
 
@@ -906,19 +889,55 @@ def map_folders(
 ) -> MappedGraph:
     """Map directory structure to ``Folder`` entities and a ``Repository`` root.
 
-    Every distinct parent directory of the given file paths becomes a Folder
-    (nested paths included, so ``a/b/c.py`` yields ``a`` and ``a/b``); each
-    file gets a hierarchical ``BELONGS_TO`` edge and each branch a
-    hierarchical ``HAS_BRANCH`` edge from the single repository node.
+    Every distinct parent directory becomes a Folder; each file links only to
+    its immediate parent, each nested folder links to its own parent, and
+    top-level folders link to the repository root (``HAS_FOLDER``).  All
+    three edge types are hierarchical.
     """
 
     entities: list[EntityWrite] = []
     relationships: list[RelationshipWrite] = []
-    folders: dict[str, set[str]] = {}
-    for path in sorted(set(paths)):
-        parts = path.split("/")[:-1]
-        for depth in range(1, len(parts) + 1):
-            folders.setdefault("/".join(parts[:depth]), set()).add(path)
+
+    def belongs_to(source: str, target: str, origin_id: str) -> None:
+        relationships.append(
+            RelationshipWrite(
+                edge_id=stable_id("edge", ids.repository_id, BELONGS_TO, source, target),
+                edge_type=BELONGS_TO,
+                source=source,
+                target=target,
+                properties={"hierarchical": True},
+                valid_from=window_start,
+                origin="git",
+                origin_id=origin_id,
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "git-belongs-to", source, target
+                ),
+                run_id=run_id,
+                info_horizon=window_start,
+                evidence_ids=(),
+            )
+        )
+
+    def has_folder(folder_id: str, folder: str) -> None:
+        relationships.append(
+            RelationshipWrite(
+                edge_id=stable_id("edge", ids.repository_id, HAS_FOLDER, folder),
+                edge_type=HAS_FOLDER,
+                source=ids.repository_id,
+                target=folder_id,
+                properties={"hierarchical": True},
+                valid_from=window_start,
+                origin="git",
+                origin_id=f"repository:{folder}",
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "git-has-folder", folder
+                ),
+                run_id=run_id,
+                info_horizon=window_start,
+                evidence_ids=(),
+            )
+        )
+
     repository_id = ids.repository_id
     entities.append(
         EntityWrite(
@@ -934,6 +953,14 @@ def map_folders(
             evidence_ids=(),
         )
     )
+    for path in sorted(set(paths)):
+        if "/" not in path:
+            belongs_to(ids.file(path), repository_id, path)
+    folders: dict[str, set[str]] = {}
+    for path in sorted(set(paths)):
+        parts = path.split("/")[:-1]
+        for depth in range(1, len(parts) + 1):
+            folders.setdefault("/".join(parts[:depth]), set()).add(path)
     for folder in sorted(folders):
         folder_id = stable_id("folder", ids.repository_id, folder)
         members = sorted(folders[folder])
@@ -956,28 +983,117 @@ def map_folders(
             )
         )
         for member in members:
+            head, _, _ = member.rpartition("/")
+            if head == folder:
+                belongs_to(ids.file(member), folder_id, member)
+        parent, _, _ = folder.rpartition("/")
+        if parent:
+            belongs_to(folder_id, stable_id("folder", ids.repository_id, parent), folder)
+        else:
+            has_folder(folder_id, folder)
+    return MappedGraph(entities=tuple(entities), relationships=tuple(relationships))
+
+
+def _preview_text(text: str | None, *, max_chars: int = 2000, max_lines: int = 40) -> str:
+    """Bounded excerpt shown in the UI; full text stays in parsed content."""
+
+    if not text:
+        return ""
+    lines = text.splitlines()[:max_lines]
+    excerpt = "\n".join(lines)
+    return excerpt[:max_chars]
+
+
+def map_diffs(
+    content: ContentIndex, index: GitIndex, ids: IdFactory, *, run_id: str
+) -> MappedGraph:
+    """Index file changes as ``Diff`` entities between commits and files.
+
+    Each ``(commit, path)`` snapshot becomes one Diff carrying the change
+    status (added/modified/deleted/renamed, or ``present`` when no change
+    record exists, e.g. boundary snapshots), the old/new blob IDs, and a
+    bounded text preview.  Commits reach files only through diffs:
+    ``TOUCHES`` edges run commit to diff, and ``CHANGES`` edges run diff to
+    file.  Both are hierarchical; nothing here is invented.
+    """
+
+    entities: list[EntityWrite] = []
+    relationships: list[RelationshipWrite] = []
+    skipped: list[str] = []
+    commit_times = {
+        record.sha: record.committed_at
+        for record in (*index.selection.selected_commits, *index.selection.boundary_commits)
+    }
+    changes_by_key = {(change.commit_sha, change.path): change for change in index.changes}
+    seen: set[str] = set()
+
+    for entry in index.snapshots:
+        committed_at = commit_times.get(entry.commit_sha)
+        if committed_at is None:
+            skipped.append(f"snapshot:{entry.snapshot_id} without commit time")
+            continue
+        diff_id = stable_id("diff", ids.repository_id, entry.commit_sha, entry.path)
+        if diff_id in seen:
+            continue
+        seen.add(diff_id)
+        change = changes_by_key.get((entry.commit_sha, entry.path))
+        parsed = content.content_for(entry.snapshot_id)
+        preview = _preview_text(parsed.text if parsed is not None else None)
+        status = change.status if change is not None else "present"
+        old_oid = change.old_oid if change is not None else None
+        new_oid = change.new_oid if change is not None else entry.object_id
+        entities.append(
+            EntityWrite(
+                logical_id=diff_id,
+                labels=("Diff",),
+                properties={
+                    "commit_sha": entry.commit_sha,
+                    "path": entry.path,
+                    "status": status,
+                    "old_oid": old_oid,
+                    "new_oid": new_oid,
+                    "is_binary": entry.is_binary,
+                    "preview": preview,
+                },
+                valid_from=committed_at,
+                origin="git",
+                origin_id=f"{entry.commit_sha}:{entry.path}",
+                event_id=stable_id(
+                    "graph-write", ids.repository_id, "git-diff",
+                    entry.commit_sha, entry.path,
+                ),
+                run_id=run_id,
+                info_horizon=committed_at,
+                evidence_ids=(ids.evidence("git", entry.commit_sha, entry.source_url),),
+            )
+        )
+        for edge_type, source, target, kind in (
+            (TOUCHES, ids.commit(entry.commit_sha), diff_id, "touches"),
+            (CHANGES, diff_id, ids.file(entry.path), "changes"),
+        ):
             relationships.append(
                 RelationshipWrite(
                     edge_id=stable_id(
-                        "edge", ids.repository_id, BELONGS_TO, member, folder
+                        "edge", ids.repository_id, edge_type,
+                        entry.commit_sha, entry.path,
                     ),
-                    edge_type=BELONGS_TO,
-                    source=ids.file(member),
-                    target=folder_id,
-                    properties={"hierarchical": True},
-                    valid_from=window_start,
+                    edge_type=edge_type,
+                    source=source,
+                    target=target,
+                    properties={"hierarchical": True, "status": status},
+                    valid_from=committed_at,
                     origin="git",
-                    origin_id=f"{member}:{folder}",
+                    origin_id=f"{entry.commit_sha}:{entry.path}:{kind}",
                     event_id=stable_id(
-                        "graph-write", ids.repository_id, "git-belongs-to",
-                        member, folder,
+                        "graph-write", ids.repository_id, f"git-{kind}",
+                        entry.commit_sha, entry.path,
                     ),
                     run_id=run_id,
-                    info_horizon=window_start,
-                    evidence_ids=(),
+                    info_horizon=committed_at,
+                    evidence_ids=(ids.evidence("git", entry.commit_sha, entry.source_url),),
                 )
             )
-    return MappedGraph(entities=tuple(entities), relationships=tuple(relationships))
+    return MappedGraph(entities=tuple(entities), relationships=tuple(relationships), skipped=tuple(skipped))
 
 
 def map_repository_branches(
@@ -1398,7 +1514,7 @@ class GraphSink(GraphSinkProtocol):
         if labels is None:
             labels = (
                 "Commit", "File", "Snapshot", "WorkItem", "ProviderLabel", "Branch",
-                "Topic", "Folder", "Class", "Repository",
+                "Topic", "Folder", "Class", "Repository", "Diff",
             )
         return {label: self._db.count_nodes_by_label(label) for label in labels}
 
@@ -1410,7 +1526,7 @@ class GraphSink(GraphSinkProtocol):
         if edge_types is None:
             edge_types = (
                 ABOUT, DEFINED_AT, PARENT_COMMIT, MEMBER_OF, OF_FILE, TOUCHES, IMPORTS,
-                BELONGS_TO, HAS_BRANCH, HAS_LABEL, CHILD_OF, TIP_OF, MERGED_AS,
+                BELONGS_TO, HAS_BRANCH, HAS_FOLDER, HAS_LABEL, CHILD_OF, TIP_OF, MERGED_AS, CHANGES,
                 "MENTIONS", "INTENDS_TO_RESOLVE", "CLOSED_BY", "RELATED_TO",
             )
         return {edge_type: self._db.count_edges_by_type(edge_type) for edge_type in edge_types}

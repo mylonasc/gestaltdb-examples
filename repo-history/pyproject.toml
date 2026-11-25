@@ -17,6 +17,8 @@ dependencies = [
   "pydantic>=2.8,<3",
   "pygit2>=1.15,<2",
   "scikit-learn>=1.4,<2",
+  "tree-sitter>=0.25,<0.26",
+  "tree-sitter-python>=0.23,<0.24",
 ]
 
 [project.optional-dependencies]

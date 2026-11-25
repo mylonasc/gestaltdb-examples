@@ -113,6 +113,36 @@ class ContentSettings(FrozenModel):
     max_imports: int = Field(default=500, ge=1, le=10_000)
 
 
+class GitHubSettings(FrozenModel):
+    """Bounded GitHub REST discovery and evidence-cache limits."""
+
+    api_url: str = "https://api.github.com"
+    token_env: str = "GITHUB_TOKEN"
+    per_page: int = Field(default=50, ge=1, le=100)
+    max_pages: int = Field(default=20, ge=1, le=100)
+    timeout_seconds: float = Field(default=20.0, gt=0.0, le=120.0)
+    max_retries: int = Field(default=2, ge=0, le=5)
+    max_rate_limit_wait_seconds: float = Field(default=60.0, ge=0.0, le=3_600.0)
+    max_response_bytes: int = Field(default=2 * 1024 * 1024, ge=1_024)
+    required_scopes: tuple[str, ...] = ()
+    user_agent: str = "gestaltdb-repo-history-example/0.1"
+
+    @field_validator("api_url")
+    @classmethod
+    def validate_api_url(cls, value: str) -> str:
+        value = value.rstrip("/")
+        if not value.startswith(("https://", "http://")):
+            raise ValueError("api_url must be an absolute HTTP(S) URL")
+        return value
+
+    @field_validator("token_env")
+    @classmethod
+    def validate_token_env(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("token_env must name an environment variable")
+        return value.strip()
+
+
 class LLMSettings(FrozenModel):
     enabled: bool = False
     provider: str = "openai"
@@ -127,6 +157,7 @@ class RuntimeConfig(FrozenModel):
     budgets: Budgets = Field(default_factory=Budgets)
     git: GitSettings = Field(default_factory=GitSettings)
     content: ContentSettings = Field(default_factory=ContentSettings)
+    github: GitHubSettings = Field(default_factory=GitHubSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     data_root: str = "data"
     cache_dir: str = "data/cache"
